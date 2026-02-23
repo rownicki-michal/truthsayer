@@ -7,24 +7,25 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// Bridge manages bidirectional data flow between the SSH client
-// and the target server session.
+// Bridge manages bidirectional data flow between an SSH client
+// and a target server session.
 //
-// Operates on io.ReadWriter instead of ssh.Channel — this allows Phase 3
-// to inject io.TeeReader, filter, and recorder without changing the Bridge structure.
+// Operates on io.ReadWriter instead of ssh.Channel — in Phase 3
+// io.TeeReader, filter and recorder can be injected without changing
+// the Bridge structure.
 type Bridge struct {
 	client       io.ReadWriter  // client side (ssh.Channel)
-	targetStdin  io.WriteCloser // stdin of the target session
-	targetStdout io.Reader      // stdout of the target session
-	targetStderr io.Reader      // stderr of the target session
+	targetStdin  io.WriteCloser // target session stdin
+	targetStdout io.Reader      // target session stdout
+	targetStderr io.Reader      // target session stderr
 }
 
-// NewBridge creates a new bridge instance.
+// NewBridge creates a new Bridge instance.
 //
-//	client     — SSH channel of the client (ssh.Channel implements io.ReadWriter)
-//	stdin      — stdin of the target session  (targetSession.StdinPipe())
-//	stdout     — stdout of the target session (targetSession.StdoutPipe())
-//	stderr     — stderr of the target session (targetSession.StderrPipe())
+//	client     — SSH client channel (ssh.Channel implements io.ReadWriter)
+//	stdin      — target session stdin  (targetSession.StdinPipe())
+//	stdout     — target session stdout (targetSession.StdoutPipe())
+//	stderr     — target session stderr (targetSession.StderrPipe())
 func NewBridge(
 	client io.ReadWriter,
 	stdin io.WriteCloser,
@@ -42,26 +43,36 @@ func NewBridge(
 // Run starts the bridge and blocks until all streams are done.
 //
 // Three goroutines run concurrently:
-//   - target server stdout → client
-//   - target server stderr → client
-//   - client → target server stdin
+//   - target stdout → client
+//   - target stderr → client
+//   - client stdin  → target stdin
 //
-// The injection point for Phase 3 is marked with a TODO comment.
+// The stdin goroutine drains all client input but is also unblocked
+// when both output streams finish — this prevents deadlocks during
+// exec commands where the client never closes its stdin explicitly.
+//
+// Phase 3 injection point marked with TODO below.
 func (b *Bridge) Run() {
 	var wg sync.WaitGroup
 	wg.Add(3)
 
-	// Direction: target server stdout → client
+	// outputDone is closed when both stdout and stderr are exhausted.
+	// Used to unblock stdin when the remote process exits.
+	outputDone := make(chan struct{})
+	var outputWg sync.WaitGroup
+	outputWg.Add(2)
+
+	// Target stdout → client
 	go func() {
 		defer wg.Done()
+		defer outputWg.Done()
 		io.Copy(b.client, b.targetStdout)
 	}()
 
-	// Direction: target server stderr → client
-	// If client is ssh.Channel — write to its separate stderr stream.
-	// Otherwise stderr goes to the client stdout (fallback).
+	// Target stderr → client (or client.Stderr() when ssh.Channel)
 	go func() {
 		defer wg.Done()
+		defer outputWg.Done()
 		if ch, ok := b.client.(ssh.Channel); ok {
 			io.Copy(ch.Stderr(), b.targetStderr)
 		} else {
@@ -69,21 +80,40 @@ func (b *Bridge) Run() {
 		}
 	}()
 
-	// Direction: client → target server stdin
+	// Signal outputDone when both output streams finish.
+	go func() {
+		outputWg.Wait()
+		close(outputDone)
+	}()
+
+	// Client stdin → target stdin
 	//
 	// TODO (Phase 3): Replace with:
-	//
-	//   tee := io.TeeReader(b.client, recorder)
+	//   tee      := io.TeeReader(b.client, recorder)
 	//   filtered := filter.WrapReader(tee)
 	//   io.Copy(b.targetStdin, filtered)
 	//
+	// Runs the copy in a separate goroutine so outputDone can unblock
+	// it by closing targetStdin when the remote process exits.
 	go func() {
 		defer wg.Done()
-		io.Copy(b.targetStdin, b.client)
 
-		// Closing stdin signals EOF to the target server
-		// without closing the entire SSH channel.
+		copyDone := make(chan struct{})
+		go func() {
+			defer close(copyDone)
+			io.Copy(b.targetStdin, b.client)
+		}()
+
+		select {
+		case <-copyDone:
+			// Client closed its end — normal shell exit.
+		case <-outputDone:
+			// Remote process exited — stop reading client stdin.
+		}
 		b.targetStdin.Close()
+
+		// Wait for the copy goroutine to drain.
+		<-copyDone
 	}()
 
 	wg.Wait()

@@ -118,7 +118,6 @@ func NewSSHServer(
 		PasswordCallback: authenticator.Callback(),
 		ServerVersion:    "SSH-2.0-TruthsayerBastion_1.0",
 	}
-
 	config.AddHostKey(hostKey)
 	s.config = config
 
@@ -402,13 +401,31 @@ func (s *SSHServer) handleSession(
 				return
 			}
 
-			// Phase 3 injection point — identyczny jak przy shell.
+			// Phase 3 injection point — identical to shell path.
 			bridge := heart.NewBridge(clientChan, targetStdin, targetStdout, targetStderr)
+
+			// Wait() must run concurrently with bridge.Run() — it flushes
+			// the stdout/stderr pipes and delivers exit-status to the client.
+			// Calling Wait() after bridge.Run() causes a deadlock: bridge
+			// blocks on pipe EOF which only arrives when Wait() is called.
+			waitErr := make(chan error, 1)
+			go func() {
+				waitErr <- targetSession.Wait()
+			}()
+
 			bridge.Run()
 
-			if err := targetSession.Wait(); err != nil {
+			// Forward exit-status from target to client — without this
+			// the client sees "remote command exited without exit status".
+			exitCode := 0
+			if err := <-waitErr; err != nil {
 				log.Printf("[SESSION] Exec %q exited with error: %v", execPayload.Command, err)
+				if exitErr, ok := err.(*ssh.ExitError); ok {
+					exitCode = exitErr.ExitStatus()
+				}
 			}
+			exitStatus := struct{ Status uint32 }{uint32(exitCode)}
+			clientChan.SendRequest("exit-status", false, ssh.Marshal(exitStatus))
 			return
 
 		case "env":
@@ -453,4 +470,13 @@ func (s *SSHServer) activeConns() int {
 //	<-srv.Ready()  // blocks until Start() has bound the port
 func (s *SSHServer) Ready() <-chan struct{} {
 	return s.ready
+}
+
+// Addr returns the address the server is listening on.
+// Returns empty string before Start() has bound the port.
+func (s *SSHServer) Addr() string {
+	if s.listener == nil {
+		return ""
+	}
+	return s.listener.Addr().String()
 }
