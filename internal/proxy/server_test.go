@@ -30,6 +30,13 @@ func generateHostKey(t *testing.T) ssh.Signer {
 	return signer
 }
 
+// minimalAuth returns a minimal AuthConfig with one user — used in tests
+// that do not exercise authentication logic but require a valid AuthConfig
+// because NewAuthenticator rejects empty user maps.
+func minimalAuth() AuthConfig {
+	return AuthConfig{Users: map[string]string{"testuser": "testpass"}}
+}
+
 // newTestServer tworzy SSHServer z minimalnymi ustawieniami.
 // Nie uruchamia serwera — tylko inicjalizuje strukturę.
 func newTestServer(t *testing.T, auth AuthConfig, target TargetConfig, limits LimitsConfig) *SSHServer {
@@ -172,45 +179,45 @@ func TestIsListenerClosed_RealListener(t *testing.T) {
 // =============================================================================
 
 func TestNewSSHServer_SemaphoreNilWhenNoLimit(t *testing.T) {
-	s := newTestServer(t, AuthConfig{}, TargetConfig{}, LimitsConfig{MaxConnections: 0})
+	s := newTestServer(t, minimalAuth(), TargetConfig{}, LimitsConfig{MaxConnections: 0})
 	assert.Nil(t, s.connSem)
 }
 
 func TestNewSSHServer_SemaphoreCreatedWithCorrectCapacity(t *testing.T) {
 	const limit = 42
-	s := newTestServer(t, AuthConfig{}, TargetConfig{}, LimitsConfig{MaxConnections: limit})
+	s := newTestServer(t, minimalAuth(), TargetConfig{}, LimitsConfig{MaxConnections: limit})
 	require.NotNil(t, s.connSem)
 	assert.Equal(t, limit, cap(s.connSem))
 }
 
 func TestNewSSHServer_SemaphoreInitiallyEmpty(t *testing.T) {
-	s := newTestServer(t, AuthConfig{}, TargetConfig{}, LimitsConfig{MaxConnections: 10})
+	s := newTestServer(t, minimalAuth(), TargetConfig{}, LimitsConfig{MaxConnections: 10})
 	require.NotNil(t, s.connSem)
 	assert.Equal(t, 0, len(s.connSem))
 }
 
 func TestNewSSHServer_ServerVersionSet(t *testing.T) {
-	s := newTestServer(t, AuthConfig{}, TargetConfig{}, LimitsConfig{})
+	s := newTestServer(t, minimalAuth(), TargetConfig{}, LimitsConfig{})
 	assert.Equal(t, "SSH-2.0-TruthsayerBastion_1.0", s.config.ServerVersion)
 }
 
 func TestNewSSHServer_InvalidAddrDoesNotFail(t *testing.T) {
 	// NewSSHServer nie binduje portu — robi to Start().
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("256.256.256.256:0", hostKey, AuthConfig{}, TargetConfig{}, LimitsConfig{})
+	s, err := NewSSHServer("256.256.256.256:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{})
 	assert.NoError(t, err)
 	assert.NotNil(t, s)
 }
 
 func TestNewSSHServer_LimitsStoredCorrectly(t *testing.T) {
 	limits := LimitsConfig{MaxConnections: 50, MaxChannelsPerConn: 10}
-	s := newTestServer(t, AuthConfig{}, TargetConfig{}, limits)
+	s := newTestServer(t, minimalAuth(), TargetConfig{}, limits)
 	assert.Equal(t, limits, s.limits)
 }
 
 func TestNewSSHServer_TargetStoredCorrectly(t *testing.T) {
 	target := TargetConfig{Addr: "10.0.0.1:22", User: "deploy", Password: "secret"}
-	s := newTestServer(t, AuthConfig{}, target, LimitsConfig{})
+	s := newTestServer(t, minimalAuth(), target, LimitsConfig{})
 	assert.Equal(t, target, s.target)
 }
 
@@ -239,18 +246,6 @@ func TestPasswordCallback_RejectsUnknownUser(t *testing.T) {
 func TestPasswordCallback_RejectsEmptyPassword(t *testing.T) {
 	auth := AuthConfig{Users: map[string]string{"alice": "secret"}}
 	err := dialWithPassword(t, serverConfigFor(t, auth), "alice", "")
-	assert.Error(t, err)
-}
-
-func TestPasswordCallback_RejectsNilUsers(t *testing.T) {
-	auth := AuthConfig{Users: nil}
-	err := dialWithPassword(t, serverConfigFor(t, auth), "alice", "secret")
-	assert.Error(t, err)
-}
-
-func TestPasswordCallback_RejectsEmptyUsers(t *testing.T) {
-	auth := AuthConfig{Users: map[string]string{}}
-	err := dialWithPassword(t, serverConfigFor(t, auth), "alice", "secret")
 	assert.Error(t, err)
 }
 
@@ -295,17 +290,17 @@ func TestPasswordCallback_CaseSensitivePassword(t *testing.T) {
 // =============================================================================
 
 func TestActiveConns_ZeroWhenNoSemaphore(t *testing.T) {
-	s := newTestServer(t, AuthConfig{}, TargetConfig{}, LimitsConfig{})
+	s := newTestServer(t, minimalAuth(), TargetConfig{}, LimitsConfig{})
 	assert.Equal(t, 0, s.activeConns())
 }
 
 func TestActiveConns_ZeroWhenSemaphoreEmpty(t *testing.T) {
-	s := newTestServer(t, AuthConfig{}, TargetConfig{}, LimitsConfig{MaxConnections: 10})
+	s := newTestServer(t, minimalAuth(), TargetConfig{}, LimitsConfig{MaxConnections: 10})
 	assert.Equal(t, 0, s.activeConns())
 }
 
 func TestActiveConns_ReflectsOccupiedSlots(t *testing.T) {
-	s := newTestServer(t, AuthConfig{}, TargetConfig{}, LimitsConfig{MaxConnections: 10})
+	s := newTestServer(t, minimalAuth(), TargetConfig{}, LimitsConfig{MaxConnections: 10})
 	s.connSem <- struct{}{}
 	s.connSem <- struct{}{}
 	s.connSem <- struct{}{}
@@ -316,7 +311,7 @@ func TestActiveConns_ReflectsOccupiedSlots(t *testing.T) {
 
 func TestActiveConns_MaxCapacity(t *testing.T) {
 	const limit = 5
-	s := newTestServer(t, AuthConfig{}, TargetConfig{}, LimitsConfig{MaxConnections: limit})
+	s := newTestServer(t, minimalAuth(), TargetConfig{}, LimitsConfig{MaxConnections: limit})
 	for i := 0; i < limit; i++ {
 		s.connSem <- struct{}{}
 	}
@@ -328,7 +323,7 @@ func TestActiveConns_MaxCapacity(t *testing.T) {
 // =============================================================================
 
 func TestSemaphore_RejectsWhenFull(t *testing.T) {
-	s := newTestServer(t, AuthConfig{}, TargetConfig{}, LimitsConfig{MaxConnections: 2})
+	s := newTestServer(t, minimalAuth(), TargetConfig{}, LimitsConfig{MaxConnections: 2})
 	s.connSem <- struct{}{}
 	s.connSem <- struct{}{}
 
@@ -341,7 +336,7 @@ func TestSemaphore_RejectsWhenFull(t *testing.T) {
 }
 
 func TestSemaphore_AllowsAfterRelease(t *testing.T) {
-	s := newTestServer(t, AuthConfig{}, TargetConfig{}, LimitsConfig{MaxConnections: 1})
+	s := newTestServer(t, minimalAuth(), TargetConfig{}, LimitsConfig{MaxConnections: 1})
 	s.connSem <- struct{}{}
 	<-s.connSem
 
@@ -356,7 +351,7 @@ func TestSemaphore_AllowsAfterRelease(t *testing.T) {
 func TestSemaphore_ConcurrentAcquire(t *testing.T) {
 	const limit = 5
 	const goroutines = 20
-	s := newTestServer(t, AuthConfig{}, TargetConfig{}, LimitsConfig{MaxConnections: limit})
+	s := newTestServer(t, minimalAuth(), TargetConfig{}, LimitsConfig{MaxConnections: limit})
 
 	var acquired int
 	var mu sync.Mutex
@@ -387,7 +382,7 @@ func TestSemaphore_ConcurrentAcquire(t *testing.T) {
 
 func TestStart_ShutdownOnContextCancel(t *testing.T) {
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("127.0.0.1:0", hostKey, AuthConfig{}, TargetConfig{}, LimitsConfig{})
+	s, err := NewSSHServer("127.0.0.1:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -414,7 +409,7 @@ func TestStart_ShutdownOnContextCancel(t *testing.T) {
 
 func TestStart_FailsOnInvalidAddr(t *testing.T) {
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("256.256.256.256:0", hostKey, AuthConfig{}, TargetConfig{}, LimitsConfig{})
+	s, err := NewSSHServer("256.256.256.256:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{})
 	require.NoError(t, err)
 	assert.Error(t, s.Start(context.Background()))
 }
@@ -425,7 +420,7 @@ func TestStart_FailsOnOccupiedPort(t *testing.T) {
 	t.Cleanup(func() { blocker.Close() })
 
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer(blocker.Addr().String(), hostKey, AuthConfig{}, TargetConfig{}, LimitsConfig{})
+	s, err := NewSSHServer(blocker.Addr().String(), hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{})
 	require.NoError(t, err)
 	assert.Error(t, s.Start(context.Background()))
 }
