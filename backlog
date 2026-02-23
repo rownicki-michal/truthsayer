@@ -1,0 +1,486 @@
+================================================================================
+  TRUTHSAYER BASTION — BACKLOG JIRA
+  Sprint-ready tasks with descriptions, acceptance criteria and dependencies
+  February 2026
+================================================================================
+
+
+================================================================================
+  EPIC: TBAS-000 — Core Proxy (Foundation)
+================================================================================
+
+TBAS-001 | Wire Authenticator into SSHServer
+Type: Task | Priority: Critical | Component: proxy
+─────────────────────────────────────────────────────────────────────────────
+Replace the inline PasswordCallback in NewSSHServer with the new Authenticator
+struct from auth.go. Server should call NewAuthenticator(cfg.Auth) at startup
+and pass auth.Callback() to ssh.ServerConfig.
+
+Acceptance criteria:
+  - NewSSHServer no longer contains inline credential comparison logic
+  - Failed login does not reveal whether the user exists (opaque error)
+  - go test ./internal/proxy/... passes including auth_test.go
+
+Files: internal/proxy/server.go, internal/proxy/auth.go
+
+
+TBAS-002 | Add users section to config.yaml and config.go
+Type: Task | Priority: Critical | Component: config
+─────────────────────────────────────────────────────────────────────────────
+Config currently has no auth.users map. Add it so credentials are loaded from
+config.yaml instead of being hardcoded in main.go.
+
+Acceptance criteria:
+  - config.yaml.example contains auth.users section with example hashed entries
+  - config.go Auth struct is populated via viper Unmarshal
+  - main.go passes cfg.Auth.Users to proxy.AuthConfig with no hardcoded values
+  - config_test.go covers loading of auth.users from YAML and env override
+
+Files: internal/config/config.go, config.yaml.example, cmd/truthsayer/main.go
+
+
+TBAS-003 | Integrate Recorder into Bridge (Phase 3 injection point)
+Type: Task | Priority: High | Component: heart, audit
+─────────────────────────────────────────────────────────────────────────────
+Bridge.Run() has a marked Phase 3 TODO comment for io.TeeReader and
+io.MultiWriter injection. Wire the Recorder from audit/recorder.go into
+the bridge so every session is recorded to a .cast file.
+
+Acceptance criteria:
+  - Bridge accepts optional Recorder via functional option or constructor param
+  - stdout and stderr streams are tee'd to the recorder
+  - stdin (client input) is recorded separately as input frames
+  - When recorder is nil (NopRecorder) bridge behaves identically to before
+  - Session file appears in audit.storage_path after session ends
+  - go test -race ./internal/heart/... passes
+
+Files: internal/heart/bridge.go, internal/audit/recorder.go
+
+
+TBAS-004 | Write E2E login test
+Type: Task | Priority: Critical | Component: tests
+─────────────────────────────────────────────────────────────────────────────
+tests/e2e_login_test.go exists but is empty. Implement full end-to-end flow:
+client → bastion → target → shell output → client.
+
+Acceptance criteria:
+  - Test spins up a minimal in-process SSH target server
+  - Client dials bastion with valid credentials, runs "echo hello", receives "hello"
+  - Test fails if bastion rejects valid credentials or drops the output
+  - Test passes with go test -race -count=1 ./tests/...
+
+Files: tests/e2e_login_test.go
+
+
+================================================================================
+  EPIC: TBAS-100 — Terminal Emulation & Anti-Obfuscation
+================================================================================
+
+TBAS-101 | Implement VTE terminal emulator (vte.go)
+Type: Task | Priority: High | Component: security/emulation
+─────────────────────────────────────────────────────────────────────────────
+Commands sent over SSH may contain ANSI escape sequences used to obfuscate
+intent (e.g. "r\033[Am" renders as "rm" after terminal processing).
+The VTE emulator decodes raw bytes into the string a human would actually see
+before the filter inspects them.
+
+Acceptance criteria:
+  - VTE.Process(raw []byte) returns the visible string after applying sequences
+  - Handles cursor movement (CSI A/B/C/D), erase sequences (CSI K/J), backspace
+  - Test: VTE.Process("r\033[Am") == "rm"
+  - Test: VTE.Process("ls\x7f\x7f\x7fcat /etc") == "cat /etc" (backspace erase)
+  - Test: VTE.Process("\033[2Jclear") == "clear" (screen clear ignored)
+  - go test ./internal/security/emulation/... passes
+
+Files: internal/security/emulation/vte.go, internal/security/emulation/vte_test.go
+Dependency: TBAS-201
+
+
+TBAS-102 | Plugin interface for terminal decoder backends
+Type: Task | Priority: Medium | Component: security/emulation
+─────────────────────────────────────────────────────────────────────────────
+Different environments (VT100, VT220, xterm-256color, tmux, screen) have
+slightly different escape sequence sets. Implement a plugin interface so
+decoders can be swapped or stacked without changing the filter pipeline.
+
+Acceptance criteria:
+  - TerminalDecoder interface defined in models/interfaces.go
+      Decode(raw []byte) (visible []byte, err error)
+  - VT100Decoder, XtermDecoder implement the interface
+  - Filter pipeline accepts a []TerminalDecoder — each decoder applied in order
+  - Unknown sequences are passed through unchanged (never dropped silently)
+  - Test: stacking VT100Decoder + XtermDecoder handles mixed sequences correctly
+
+Files: internal/models/interfaces.go, internal/security/emulation/vt100.go,
+       internal/security/emulation/xterm.go
+Dependency: TBAS-101
+
+
+TBAS-103 | Handle tmux and screen multiplexer sequences
+Type: Task | Priority: Medium | Component: security/emulation
+─────────────────────────────────────────────────────────────────────────────
+tmux uses DCS (Device Control String) sequences and screen uses its own
+control codes. Commands run inside a multiplexer pane must still be visible
+to the filter after decoding.
+
+Acceptance criteria:
+  - TmuxDecoder strips DCS wrappers and extracts inner terminal data
+  - ScreenDecoder handles screen-specific control sequences
+  - Test: command run inside tmux pane produces correct visible string
+  - No panic on malformed or incomplete escape sequences (fuzzing baseline)
+
+Files: internal/security/emulation/tmux.go, internal/security/emulation/screen.go
+Dependency: TBAS-102
+
+
+TBAS-104 | Fuzz terminal decoder with AFL/go-fuzz
+Type: Task | Priority: Medium | Component: security/emulation
+─────────────────────────────────────────────────────────────────────────────
+Terminal decoders process attacker-controlled bytes. Fuzz all decoders to
+catch panics, infinite loops and incorrect output before filter integration.
+
+Acceptance criteria:
+  - FuzzVTE(f *testing.F) corpus covers: empty, single byte, long sequences
+  - No panic or infinite loop found after 60s of fuzzing
+  - go test -fuzz=FuzzVTE ./internal/security/emulation/ runs cleanly
+
+Files: internal/security/emulation/vte_fuzz_test.go
+Dependency: TBAS-101
+
+
+================================================================================
+  EPIC: TBAS-200 — Security Filter Engine
+================================================================================
+
+TBAS-201 | Implement filter engine with Aho-Corasick
+Type: Task | Priority: High | Component: security/filter
+─────────────────────────────────────────────────────────────────────────────
+Regex matching on every keystroke is too slow for real-time filtering.
+Use Aho-Corasick multi-pattern search for O(n) matching regardless of
+the number of rules. Rules are loaded from config.yaml security.blacklist.
+
+Acceptance criteria:
+  - FilterEngine.Inspect(visible []byte) returns FilterDecision{Block, Reason}
+  - Patterns loaded from config at startup, reloadable without restart (SIGHUP)
+  - Benchmark: 1000 patterns, 1KB input < 1ms on commodity hardware
+  - Test: "rm -rf /" blocked, "rm -rf /tmp/cache" allowed (prefix match)
+  - go test ./internal/security/filter/... passes
+
+Files: internal/security/filter/engine.go, internal/security/filter/engine_test.go
+Dependency: none
+
+
+TBAS-202 | Connect filter engine to bridge stdin stream
+Type: Task | Priority: High | Component: heart, security/filter
+─────────────────────────────────────────────────────────────────────────────
+Filter must intercept stdin BEFORE bytes reach the target server. Wire the
+filter into the bridge stdin goroutine using the interceptor pattern.
+Blocked commands must not be forwarded; the client receives an error message.
+
+Acceptance criteria:
+  - Blocked command: target never receives the bytes
+  - Client receives a clear error: "command blocked by policy: <reason>"
+  - Session continues after a blocked command (no disconnect unless configured)
+  - Kill-switch option: disconnect session immediately on block
+  - E2E test: client sends blacklisted command, receives block message
+
+Files: internal/security/filter/interceptor.go, internal/heart/bridge.go
+Dependency: TBAS-201, TBAS-101
+
+
+TBAS-203 | Write E2E filter test
+Type: Task | Priority: High | Component: tests
+─────────────────────────────────────────────────────────────────────────────
+tests/e2e_filter_test.go exists but is empty. Implement end-to-end test
+that verifies a blacklisted command is blocked at the bastion level.
+
+Acceptance criteria:
+  - Test sends "rm -rf /" through bastion, verifies target never executes it
+  - Test sends "ls -la" (allowed), verifies output reaches client
+  - Test verifies obfuscated variant ("r\033[Am -rf /") is also blocked
+    after VTE decoding
+  - go test -race ./tests/... passes
+
+Files: tests/e2e_filter_test.go
+Dependency: TBAS-202, TBAS-101
+
+
+================================================================================
+  EPIC: TBAS-300 — Audit & Session Recording
+================================================================================
+
+TBAS-301 | Generate unique session ID and attach to Recorder
+Type: Task | Priority: High | Component: audit, proxy
+─────────────────────────────────────────────────────────────────────────────
+Each SSH session needs a unique, collision-resistant ID used as the recording
+filename and for database correlation. Generate it at connection time and
+thread it through server → handleSession → Recorder.
+
+Acceptance criteria:
+  - Session ID format: <timestamp>-<user>-<random8hex> e.g. 20260223-alice-a1b2c3d4
+  - ID logged at session start and end
+  - Recording file named <sessionID>.cast in audit.storage_path
+  - ID accessible in handleSession without global state
+
+Files: internal/proxy/server.go, internal/audit/recorder.go
+
+
+TBAS-302 | Implement live session streamer (WebSocket)
+Type: Task | Priority: Medium | Component: audit
+─────────────────────────────────────────────────────────────────────────────
+audit/streamer.go is a skeleton. Implement a WebSocket streamer that emits
+terminal frames in real time so admins can observe active sessions in the
+browser without waiting for session end.
+
+Acceptance criteria:
+  - Streamer implements io.Writer — pluggable into bridge via io.MultiWriter
+  - Multiple observers supported per session (fan-out)
+  - New observer joining mid-session receives buffered last N bytes for context
+  - Observer disconnect does not affect the proxied session
+  - Rate limiting: max 10 observers per session
+
+Files: internal/audit/streamer.go, internal/audit/streamer_test.go
+Dependency: TBAS-003
+
+
+TBAS-303 | Store session metadata in PostgreSQL
+Type: Task | Priority: Medium | Component: store
+─────────────────────────────────────────────────────────────────────────────
+internal/store/db.go is a skeleton. Implement session metadata persistence:
+start time, end time, user, source IP, target, recording path, risk score.
+
+Acceptance criteria:
+  - Session row inserted at session start, updated at end with duration
+  - SessionStore interface from models/interfaces.go implemented
+  - Integration test uses testcontainers-go (no real Postgres needed in CI)
+  - Recorder path stored so UI can locate the .cast file
+
+Files: internal/store/db.go
+Dependency: TBAS-301
+
+
+================================================================================
+  EPIC: TBAS-400 — Identity & Zero Trust
+================================================================================
+
+TBAS-401 | Implement LDAP identity provider
+Type: Task | Priority: Medium | Component: identity
+─────────────────────────────────────────────────────────────────────────────
+internal/identity/ldap.go is a skeleton. Implement LDAP bind-based
+authentication so bastion users are managed in Active Directory / OpenLDAP
+instead of config.yaml.
+
+Acceptance criteria:
+  - LDAPProvider implements identity.Provider interface
+  - Successful bind → authenticated, failed bind → access denied
+  - Connection pool with configurable size and timeout
+  - Credentials never logged (verified by log output scanning in tests)
+  - Test uses a mock LDAP server (go-ldap/ldap + in-process server)
+
+Files: internal/identity/ldap.go, internal/identity/provider.go,
+       internal/identity/ldap_test.go
+
+
+TBAS-402 | JIT certificate issuer (CA signer)
+Type: Task | Priority: Medium | Component: ca
+─────────────────────────────────────────────────────────────────────────────
+internal/ca/signer.go is a skeleton. Implement JIT certificate issuance:
+bastion signs a short-lived SSH user certificate (TTL ~15 minutes) for each
+outbound connection so target servers never store per-user authorized_keys.
+
+Acceptance criteria:
+  - CASigner.Issue(user, principals []string, ttl time.Duration) ssh.Signer
+  - Certificate TTL enforced — expired cert rejected by target
+  - CA private key loaded from Vault (secrets.VaultClient)
+  - Test: issued cert authenticates successfully, expired cert is rejected
+
+Files: internal/ca/signer.go, internal/ca/signer_test.go
+Dependency: TBAS-501
+
+
+TBAS-403 | GeoIP checker with Impossible Travel detection
+Type: Task | Priority: Medium | Component: security
+─────────────────────────────────────────────────────────────────────────────
+Implement IP geolocation using MaxMind GeoLite2. Block or alert when a user
+connects from a country not in their allowlist or when consecutive logins
+are geographically impossible (e.g. Warsaw → Singapore within 10 minutes).
+
+Acceptance criteria:
+  - GeoChecker.Check(ip net.IP) returns (country, risk, error) in < 1ms
+  - Impossible Travel: two logins > 5000 km apart within 1 hour = HIGH risk
+  - Country allowlist configurable per user in config.yaml
+  - Test uses embedded .mmdb fixture (no external network calls)
+
+Files: internal/security/geo/checker.go, internal/security/geo/checker_test.go
+
+
+================================================================================
+  EPIC: TBAS-500 — AI Behaviour Analysis
+================================================================================
+
+TBAS-501 | Async AI command intent analyzer (Ollama / Mistral 7B)
+Type: Task | Priority: Medium | Component: security/behavior
+─────────────────────────────────────────────────────────────────────────────
+internal/security/behavior/analyzer.go is a skeleton. Implement an async
+AI sidecar that buffers session commands and periodically sends them to a
+local Ollama instance for intent analysis. AI never blocks the session.
+
+Acceptance criteria:
+  - AIAnalyzer runs in a separate goroutine, connected to bridge via channel
+  - Analysis triggered every N commands or T seconds (configurable)
+  - Response schema: {risk: "high"|"medium"|"low", reason: string}
+  - HIGH risk → alert sent to admin via SessionMux, session not blocked
+  - Analyzer failure (Ollama down) logged but never crashes the session
+  - Test mocks Ollama HTTP endpoint
+
+Files: internal/security/behavior/analyzer.go,
+       internal/security/behavior/analyzer_test.go
+Dependency: TBAS-003
+
+
+TBAS-502 | Leaky bucket anomaly detector
+Type: Task | Priority: Low | Component: security/behavior
+─────────────────────────────────────────────────────────────────────────────
+Detect abnormal command velocity (e.g. 500 commands/min) using a leaky
+bucket algorithm. Sudden spikes may indicate automated exploitation scripts
+running through the session.
+
+Acceptance criteria:
+  - LeakyBucket.Add(n int) returns true when rate exceeded
+  - Configurable rate and burst size per user
+  - Alert generated when threshold exceeded, session not terminated
+  - Test: 1000 rapid Add() calls triggers alert at correct threshold
+
+Files: internal/security/behavior/analyzer.go
+
+
+================================================================================
+  EPIC: TBAS-600 — Observability & Operations
+================================================================================
+
+TBAS-601 | Prometheus metrics instrumentation
+Type: Task | Priority: Medium | Component: observability
+─────────────────────────────────────────────────────────────────────────────
+internal/observability/metrics.go is a skeleton. Expose Prometheus metrics
+for all key operational signals. Metrics must be useful for SLA alerting.
+
+Acceptance criteria:
+  - bastion_auth_duration_seconds  histogram (P95 < 500ms, P99 < 2000ms)
+  - bastion_active_sessions        gauge
+  - bastion_blocked_commands_total counter (label: rule_name)
+  - bastion_ai_alerts_total        counter (label: risk_level)
+  - bastion_session_bytes_total    counter (label: direction=stdin|stdout)
+  - /metrics endpoint exposed on configurable port (default 9090)
+  - go test ./internal/observability/... passes
+
+Files: internal/observability/metrics.go, internal/observability/metrics_test.go
+
+
+TBAS-602 | SessionMux — admin observation and takeover
+Type: Task | Priority: Medium | Component: manager
+─────────────────────────────────────────────────────────────────────────────
+Implement the SessionMux that allows an administrator to attach to a live
+session in read-only (Observation Mode) or read-write (Interactive Mode).
+Admin can also lock the user's keyboard input without terminating the session.
+
+Acceptance criteria:
+  - Multiple read-only observers attached via io.MultiWriter fan-out
+  - One active admin writer at a time (mutex-protected)
+  - LockUserInput(true/false) blocks/unblocks client stdin in bridge
+  - Observer joining mid-session sees last 4KB of buffered output
+  - Disconnect of observer or admin does not affect the proxied session
+
+Files: internal/manager/session_mux.go
+Dependency: TBAS-003, TBAS-302
+
+
+TBAS-603 | eBPF agent for kernel-level syscall monitoring
+Type: Task | Priority: Low | Component: pkg/ebpf
+─────────────────────────────────────────────────────────────────────────────
+pkg/ebpf/loader.go is a skeleton. Implement an eBPF agent that runs on the
+target server and monitors sensitive syscalls (execve, open, connect, chmod).
+Reports to bastion via gRPC stream.
+
+Acceptance criteria:
+  - Agent attaches to execve and connect tracepoints using cilium/ebpf
+  - Events streamed to bastion via gRPC (api/*.proto)
+  - CO-RE compilation — works on kernel 5.15+ without recompilation
+  - Test: chmod 777 /etc/passwd generates an alert event
+  - Agent continues running if gRPC stream is temporarily interrupted
+
+Files: pkg/ebpf/loader.go, api/*.proto, internal/security/bpf/client.go
+Dependency: TBAS-601
+
+
+================================================================================
+  EPIC: TBAS-700 — Developer Experience
+================================================================================
+
+TBAS-701 | Structured logging with slog
+Type: Task | Priority: Low | Component: all
+─────────────────────────────────────────────────────────────────────────────
+All current logging uses the standard log package with manual [TAG] prefixes.
+Replace with log/slog (Go 1.21+) for structured JSON output compatible with
+Datadog, Loki and CloudWatch. Log level controlled by audit.log_level config.
+
+Acceptance criteria:
+  - All log.Printf replaced with slog.Info / slog.Warn / slog.Error
+  - JSON output in production, text output in development (configurable)
+  - Sensitive fields (passwords, private keys) never appear in log output
+  - slog.With(session_id, user, remote_addr) used for per-request context
+
+Files: all *.go files
+
+
+TBAS-702 | Docker Compose dev environment
+Type: Task | Priority: Low | Component: ops
+─────────────────────────────────────────────────────────────────────────────
+Set up a one-command local development environment with bastion, a target
+OpenSSH server, PostgreSQL, and Prometheus+Grafana.
+
+Acceptance criteria:
+  - docker compose up starts all services
+  - ssh -p 2222 alice@localhost connects through bastion to the target container
+  - Prometheus scrapes /metrics, Grafana dashboard loads without manual config
+  - README documents the dev setup in < 10 steps
+
+Files: docker-compose.yml, Dockerfile (update), README.md
+
+
+TBAS-703 | Makefile with standard targets
+Type: Task | Priority: Low | Component: ops
+─────────────────────────────────────────────────────────────────────────────
+Standardise build, test and lint commands so contributors do not need to
+remember long go invocations.
+
+Acceptance criteria:
+  - make build   → go build ./...
+  - make test    → go test -race -count=1 ./...
+  - make lint    → staticcheck + gofmt check
+  - make fuzz    → go test -fuzz=. ./internal/security/emulation/
+  - make docker  → docker build -t truthsayer:dev .
+  - make run     → go run ./cmd/truthsayer --config config.yaml
+
+Files: Makefile
+
+
+================================================================================
+  DEPENDENCY GRAPH (critical path)
+================================================================================
+
+  TBAS-001 (wire auth)
+  TBAS-002 (config users)
+       └── TBAS-004 (E2E login)
+                └── TBAS-003 (recorder in bridge)
+                         └── TBAS-203 (E2E filter)
+                                  └── TBAS-202 (filter in bridge)
+                                           └── TBAS-201 (filter engine)
+                                                    └── TBAS-101 (VTE decoder)
+                                                             └── TBAS-102 (decoder plugins)
+                                                                      └── TBAS-103 (tmux/screen)
+
+
+  TBAS-501 (AI analyzer)  ← TBAS-003
+  TBAS-402 (JIT certs)    ← TBAS-501 (Vault)
+  TBAS-602 (SessionMux)   ← TBAS-003, TBAS-302
+  TBAS-603 (eBPF)         ← TBAS-601 (metrics/gRPC)

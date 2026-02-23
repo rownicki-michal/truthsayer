@@ -1,30 +1,31 @@
 #!/bin/sh
-# .git/hooks/pre-commit
+# .githooks/pre-commit
 # Runs before every commit: format, lint, vet, test.
-# Install: cp .githooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+# Excludes vendor/ — external dependencies must not be modified.
+# Install: git config core.hooksPath .githooks
 
 set -e
 
 echo "==> Checking formatting (gofmt)..."
-UNFORMATTED=$(gofmt -l .)
+UNFORMATTED=$(gofmt -l $(find . -name "*.go" -not -path "./vendor/*"))
 if [ -n "$UNFORMATTED" ]; then
     echo "The following files are not formatted:"
     echo "$UNFORMATTED"
-    echo "Run: gofmt -w ."
+    echo "Run: gofmt -w \$(find . -name '*.go' -not -path './vendor/*')"
     exit 1
 fi
 
 echo "==> Running go vet..."
-go vet ./...
+go vet $(go list ./... | grep -v "/vendor/")
 
 echo "==> Running staticcheck..."
 if command -v staticcheck >/dev/null 2>&1; then
-    staticcheck ./...
+    staticcheck $(go list ./... | grep -v "/vendor/")
 else
     echo "   staticcheck not found — skipping (install: go install honnef.co/go/tools/cmd/staticcheck@latest)"
 fi
 
 echo "==> Running tests..."
-go test -race -count=1 ./...
+go test -race -count=1 $(go list ./... | grep -v "/vendor/")
 
 echo "==> All checks passed."
