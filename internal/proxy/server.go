@@ -17,12 +17,6 @@ import (
 	"truthsayer/internal/heart"
 )
 
-// AuthConfig holds the allowed credentials for clients authenticating to the bastion.
-// TODO (Phase 4): Replace with LDAP/OIDC/Okta integration (internal/identity).
-type AuthConfig struct {
-	Users map[string]string // username -> password
-}
-
 // LimitsConfig holds configurable resource limits for the server.
 // TargetConfig is defined in target_config.go.
 // Zero value means no limit. All values are loaded from config.yaml.
@@ -101,6 +95,11 @@ func NewSSHServer(
 	target TargetConfig,
 	limits LimitsConfig,
 ) (*SSHServer, error) {
+	authenticator, err := NewAuthenticator(auth)
+	if err != nil {
+		return nil, fmt.Errorf("invalid auth config: %w", err)
+	}
+
 	s := &SSHServer{
 		addr:    addr,
 		hostKey: hostKey,
@@ -116,19 +115,10 @@ func NewSSHServer(
 	}
 
 	config := &ssh.ServerConfig{
-		// PasswordCallback verifies client credentials against AuthConfig.
-		// Credentials are loaded from config.yaml — never hardcoded.
-		PasswordCallback: func(c ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
-			expected, ok := auth.Users[c.User()]
-			if !ok || expected != string(pass) {
-				log.Printf("[AUTH] Access denied for user %q from %s", c.User(), c.RemoteAddr())
-				return nil, fmt.Errorf("access denied")
-			}
-			log.Printf("[AUTH] Authenticated user %q from %s", c.User(), c.RemoteAddr())
-			return nil, nil
-		},
-		ServerVersion: "SSH-2.0-TruthsayerBastion_1.0",
+		PasswordCallback: authenticator.Callback(),
+		ServerVersion:    "SSH-2.0-TruthsayerBastion_1.0",
 	}
+
 	config.AddHostKey(hostKey)
 	s.config = config
 
