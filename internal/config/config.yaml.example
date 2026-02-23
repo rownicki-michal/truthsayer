@@ -1,0 +1,21 @@
+# To jest plik przykładowy. Skopiuj go jako 'config.yaml'
+# i dostosuj do swojego środowiska.
+
+server:
+  port: 2222
+  host: "0.0.0.0"
+  host_key_path: "./certs/bastion_key"
+
+target:
+  default_addr: "127.0.0.1:22"
+  default_user: "dev-user"
+
+security:
+  blacklist:
+    - "rm -rf"
+    - "mkfs"
+  session_timeout: 3600
+
+audit:
+  storage_path: "./logs/sessions"
+  log_level: "debug"
