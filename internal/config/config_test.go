@@ -10,21 +10,19 @@ import (
 )
 
 func TestLoad(t *testing.T) {
-	// Create a temporary directory for test config files.
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
-	t.Run("loads default values", func(t *testing.T) {
-		// Clear the environment to avoid interference from existing variables.
+	t.Run("loads default values when file does not exist", func(t *testing.T) {
 		os.Clearenv()
 
-		// Load a non-existent file — setDefaults() values should apply.
-		cfg, err := Load("config.yaml.example")
+		// Non-existent file — setDefaults() values must apply.
+		cfg, err := Load("config.yaml.")
 
 		require.NoError(t, err)
-		assert.Equal(t, 2222, cfg.Port)
-		assert.Equal(t, "0.0.0.0", cfg.Host)
-		assert.Equal(t, "info", cfg.LogLevel)
+		assert.Equal(t, 2222, cfg.Server.Port)
+		assert.Equal(t, "0.0.0.0", cfg.Server.Host)
+		assert.Equal(t, "info", cfg.Audit.LogLevel)
 	})
 
 	t.Run("loads values from YAML file", func(t *testing.T) {
@@ -43,15 +41,14 @@ audit:
 		cfg, err := Load(configPath)
 
 		require.NoError(t, err)
-		assert.Equal(t, 8080, cfg.Port)
-		assert.Equal(t, "127.0.0.1", cfg.Host)
-		assert.Equal(t, "debug", cfg.LogLevel)
+		assert.Equal(t, 8080, cfg.Server.Port)
+		assert.Equal(t, "127.0.0.1", cfg.Server.Host)
+		assert.Equal(t, "debug", cfg.Audit.LogLevel)
 	})
 
 	t.Run("environment variables override file values", func(t *testing.T) {
 		os.Clearenv()
 
-		// Establish a base config file.
 		yamlContent := `
 server:
   port: 8080
@@ -59,7 +56,6 @@ server:
 		err := os.WriteFile(configPath, []byte(yamlContent), 0644)
 		require.NoError(t, err)
 
-		// Env vars have the highest priority (explicit BindEnv in Load).
 		os.Setenv("TRUTHSAYER_PORT", "9999")
 		os.Setenv("LOG_LEVEL", "warn")
 
@@ -75,8 +71,7 @@ server:
 	t.Run("returns error on invalid YAML", func(t *testing.T) {
 		os.Clearenv()
 
-		badYaml := "server: port: [invalid yaml"
-		err := os.WriteFile(configPath, []byte(badYaml), 0644)
+		err := os.WriteFile(configPath, []byte("server: port: [invalid yaml"), 0644)
 		require.NoError(t, err)
 
 		_, err = Load(configPath)

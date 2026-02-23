@@ -4,16 +4,21 @@ import (
 	"fmt"
 	"strings"
 
+	"errors"
+	"os"
+
 	"github.com/spf13/viper"
 )
 
 // Config holds all application settings loaded from file and environment variables.
 // Struct tags are used by the Viper mapstructure decoder.
 type Config struct {
-	Server   `mapstructure:"server"`
-	Target   `mapstructure:"target"`
-	Security `mapstructure:"security"`
-	Audit    `mapstructure:"audit"`
+	Server   Server   `mapstructure:"server"`
+	Target   Target   `mapstructure:"target"`
+	Auth     Auth     `mapstructure:"auth"`
+	Limits   Limits   `mapstructure:"limits"`
+	Security Security `mapstructure:"security"`
+	Audit    Audit    `mapstructure:"audit"`
 }
 
 type Server struct {
@@ -25,6 +30,18 @@ type Server struct {
 type Target struct {
 	DefaultAddr string `mapstructure:"default_addr"`
 	DefaultUser string `mapstructure:"default_user"`
+}
+
+// Auth holds credentials for clients connecting to the bastion.
+// TODO (Phase 4): Replace with LDAP/OIDC via internal/identity.
+type Auth struct {
+	Users map[string]string `mapstructure:"users"` // username -> password
+}
+
+// Limits controls maximum concurrency for connections and channels.
+type Limits struct {
+	MaxConnections     int `mapstructure:"max_connections"`
+	MaxChannelsPerConn int `mapstructure:"max_channels_per_conn"`
 }
 
 type Security struct {
@@ -41,16 +58,12 @@ type Audit struct {
 func Load(configPath string) (*Config, error) {
 	v := viper.New()
 
-	// 1. Set config file parameters.
 	v.SetConfigFile(configPath)
 	v.SetConfigType("yaml")
 
-	// 2. Enable automatic environment variable binding.
 	v.AutomaticEnv()
-	// Replace dots with underscores in env key names (e.g. server.port → SERVER_PORT).
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 
-	// 3. Bind explicit environment variable names.
 	v.BindEnv("server.port", "TRUTHSAYER_PORT")
 	v.BindEnv("server.host", "TRUTHSAYER_HOST")
 	v.BindEnv("server.host_key_path", "TRUTHSAYER_HOST_KEY")
@@ -59,24 +72,33 @@ func Load(configPath string) (*Config, error) {
 	v.BindEnv("audit.storage_path", "AUDIT_STORAGE")
 	v.BindEnv("audit.log_level", "LOG_LEVEL")
 
-	// 4. Apply default values.
 	setDefaults(v)
 
-	// 5. Read the config file. If missing, fall back to env vars and defaults.
 	if err := v.ReadInConfig(); err != nil {
-		// Ignore "file not found" — containers may rely entirely on env vars.
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		// When using SetConfigFile, viper returns *os.PathError for missing files
+		// rather than ConfigFileNotFoundError — check using os.IsNotExist instead.
+		if !isNotFound(err) {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
 	}
 
 	var cfg Config
-	// Unmarshal Viper values into the Config struct.
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
 	return &cfg, nil
+}
+
+// isNotFound returns true when err indicates the config file does not exist.
+// Viper returns ConfigFileNotFoundError only when using SetConfigName + AddConfigPath.
+// When using SetConfigFile it returns *os.PathError — handle both cases.
+func isNotFound(err error) bool {
+	if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+		return true
+	}
+	var pathErr *os.PathError
+	return errors.As(err, &pathErr) && os.IsNotExist(pathErr)
 }
 
 // setDefaults defines baseline values for all configuration parameters.
@@ -85,6 +107,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.host", "0.0.0.0")
 	v.SetDefault("server.host_key_path", "host_key")
 	v.SetDefault("target.default_addr", "127.0.0.1:22")
+	v.SetDefault("limits.max_connections", 100)
+	v.SetDefault("limits.max_channels_per_conn", 10)
 	v.SetDefault("security.session_timeout", 3600)
 	v.SetDefault("audit.storage_path", "./logs/sessions")
 	v.SetDefault("audit.log_level", "info")
