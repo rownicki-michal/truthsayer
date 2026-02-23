@@ -12,16 +12,15 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
 	"golang.org/x/crypto/ssh"
 )
 
 // =============================================================================
-// Helpers — shared between server_test.go and client_test.go
+// Helpers — współdzielone między server_test.go i client_test.go
 // =============================================================================
 
-// generateHostKey creates an ephemeral RSA key for tests.
-// Never use in production — the key is not persisted.
+// generateHostKey tworzy efemeryczny klucz RSA do testów.
+// Nigdy nie używaj w produkcji — klucz nie jest persystowany.
 func generateHostKey(t *testing.T) ssh.Signer {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -31,8 +30,8 @@ func generateHostKey(t *testing.T) ssh.Signer {
 	return signer
 }
 
-// newTestServer creates an SSHServer with minimal configuration.
-// Does not start the server — only initializes the struct.
+// newTestServer tworzy SSHServer z minimalnymi ustawieniami.
+// Nie uruchamia serwera — tylko inicjalizuje strukturę.
 func newTestServer(t *testing.T, auth AuthConfig, target TargetConfig, limits LimitsConfig) *SSHServer {
 	t.Helper()
 	hostKey := generateHostKey(t)
@@ -41,9 +40,9 @@ func newTestServer(t *testing.T, auth AuthConfig, target TargetConfig, limits Li
 	return s
 }
 
-// startServer starts an SSHServer on a random port and registers cleanup.
-// Creates the listener manually before starting the goroutine — address is known immediately,
-// without time.Sleep and without race conditions.
+// startServer uruchamia SSHServer na losowym porcie i rejestruje cleanup.
+// Tworzy listener ręcznie przed startem gorutyny — adres jest znany od razu,
+// bez time.Sleep i bez race condition.
 func startServer(t *testing.T, auth AuthConfig, limits LimitsConfig) string {
 	t.Helper()
 
@@ -63,19 +62,19 @@ func startServer(t *testing.T, auth AuthConfig, limits LimitsConfig) string {
 	return addr
 }
 
-// serverConfigFor extracts *ssh.ServerConfig from a newly built SSHServer.
-// Used to test PasswordCallback via dialWithPassword.
+// serverConfigFor wyciąga *ssh.ServerConfig z nowo zbudowanego SSHServer.
+// Używane do testowania PasswordCallback przez dialWithPassword.
 func serverConfigFor(t *testing.T, auth AuthConfig) *ssh.ServerConfig {
 	t.Helper()
 	s := newTestServer(t, auth, TargetConfig{}, LimitsConfig{})
 	return s.config
 }
 
-// dialWithPassword performs an SSH handshake with a password via a dedicated tcp listener.
+// dialWithPassword wykonuje SSH handshake z hasłem przez dedykowany tcp listener.
 //
-// We don't use net.Pipe() — its synchronous (unbuffered) writes cause
-// deadlock when both sides try to send the SSH version banner simultaneously.
-// A dedicated listener on a random port eliminates this problem.
+// Nie używamy net.Pipe() — jego synchroniczne (niebuforowane) zapisy powodują
+// deadlock gdy obie strony próbują wysłać SSH version banner jednocześnie.
+// Dedykowany listener na losowym porcie eliminuje ten problem.
 func dialWithPassword(t *testing.T, serverConfig *ssh.ServerConfig, user, pass string) error {
 	t.Helper()
 
@@ -196,7 +195,7 @@ func TestNewSSHServer_ServerVersionSet(t *testing.T) {
 }
 
 func TestNewSSHServer_InvalidAddrDoesNotFail(t *testing.T) {
-	// NewSSHServer does not bind the port — Start() does that.
+	// NewSSHServer nie binduje portu — robi to Start().
 	hostKey := generateHostKey(t)
 	s, err := NewSSHServer("256.256.256.256:0", hostKey, AuthConfig{}, TargetConfig{}, LimitsConfig{})
 	assert.NoError(t, err)
@@ -325,7 +324,7 @@ func TestActiveConns_MaxCapacity(t *testing.T) {
 }
 
 // =============================================================================
-// Semaphore — connection limiting mechanism
+// Semafor — mechanizm limitowania połączeń
 // =============================================================================
 
 func TestSemaphore_RejectsWhenFull(t *testing.T) {
@@ -335,9 +334,9 @@ func TestSemaphore_RejectsWhenFull(t *testing.T) {
 
 	select {
 	case s.connSem <- struct{}{}:
-		t.Fatal("semaphore full — third slot should not be available")
+		t.Fatal("semafor pełny — trzeci slot nie powinien być dostępny")
 	default:
-		// correctly rejected
+		// poprawnie odrzucone
 	}
 }
 
@@ -348,9 +347,9 @@ func TestSemaphore_AllowsAfterRelease(t *testing.T) {
 
 	select {
 	case s.connSem <- struct{}{}:
-		// correct — slot available after release
+		// poprawnie — slot dostępny po zwolnieniu
 	default:
-		t.Fatal("slot should be available after release")
+		t.Fatal("slot powinien być dostępny po zwolnieniu")
 	}
 }
 
@@ -395,9 +394,13 @@ func TestStart_ShutdownOnContextCancel(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- s.Start(ctx) }()
 
-	require.Eventually(t, func() bool {
-		return s.listener != nil
-	}, 2*time.Second, 5*time.Millisecond)
+	// Wait until Start() has bound the port — race-free, no polling.
+	select {
+	case <-s.Ready():
+		// listener is bound and accepting
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not become ready within 2s")
+	}
 
 	cancel()
 
@@ -405,7 +408,7 @@ func TestStart_ShutdownOnContextCancel(t *testing.T) {
 	case err := <-done:
 		assert.NoError(t, err)
 	case <-time.After(3 * time.Second):
-		t.Fatal("server did not stop within 3s")
+		t.Fatal("serwer nie zatrzymał się w ciągu 3s")
 	}
 }
 
@@ -438,7 +441,7 @@ func TestStart_MultipleSequentialConnections(t *testing.T) {
 	addr := startServer(t, AuthConfig{Users: map[string]string{"u": "p"}}, LimitsConfig{})
 	for i := 0; i < 5; i++ {
 		conn, err := net.DialTimeout("tcp", addr, time.Second)
-		require.NoError(t, err, "connection %d", i)
+		require.NoError(t, err, "połączenie %d", i)
 		conn.Close()
 	}
 }
@@ -464,6 +467,6 @@ func TestStart_ConcurrentConnections(t *testing.T) {
 	wg.Wait()
 
 	for i, err := range errs {
-		assert.NoError(t, err, "connection %d", i)
+		assert.NoError(t, err, "połączenie %d", i)
 	}
 }

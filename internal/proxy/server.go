@@ -65,6 +65,10 @@ type SSHServer struct {
 	// can hold a slot simultaneously — no race condition, no atomic counters needed.
 	// nil when MaxConnections is 0 (no limit configured).
 	connSem chan struct{}
+
+	// ready is closed by Start() once the listener is bound and accepting.
+	// Tests and callers can block on <-s.Ready() to avoid polling s.listener.
+	ready chan struct{}
 }
 
 // ptyRequest holds the PTY parameters sent by the client.
@@ -102,6 +106,7 @@ func NewSSHServer(
 		hostKey: hostKey,
 		target:  target,
 		limits:  limits,
+		ready:   make(chan struct{}),
 	}
 
 	// Initialise the connection semaphore only when a limit is configured.
@@ -143,6 +148,10 @@ func (s *SSHServer) Start(ctx context.Context) error {
 	}
 	log.Printf("[SSH] Truthsayer bastion listening on %s (max_connections=%d, max_channels_per_conn=%d)",
 		s.addr, s.limits.MaxConnections, s.limits.MaxChannelsPerConn)
+
+	// Signal that the listener is ready — unblocks Ready() waiters.
+	// Closing a channel broadcasts to all receivers without race conditions.
+	close(s.ready)
 
 	// Watch for OS signals and context cancellation.
 	go func() {
@@ -446,4 +455,12 @@ func (s *SSHServer) activeConns() int {
 		return 0
 	}
 	return len(s.connSem)
+}
+
+// Ready returns a channel that is closed once the listener is bound and
+// accepting connections. Use it in tests to avoid polling s.listener:
+//
+//	<-srv.Ready()  // blocks until Start() has bound the port
+func (s *SSHServer) Ready() <-chan struct{} {
+	return s.ready
 }
