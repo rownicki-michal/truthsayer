@@ -33,12 +33,10 @@ func main() {
 		log.Fatalf("[BOOT] Failed to load host key: %v", err)
 	}
 
+	// Users are loaded from config.yaml — no hardcoded credentials.
 	// TODO (Phase 4): Replace with LDAP/OIDC via identity.Provider.
-	// For now users are loaded from config — dev/test only.
 	auth := proxy.AuthConfig{
-		Users: map[string]string{
-			cfg.Target.DefaultUser: "secret", // placeholder
-		},
+		Users: cfg.Auth.Users,
 	}
 
 	target := proxy.TargetConfig{
@@ -48,8 +46,8 @@ func main() {
 	}
 
 	limits := proxy.LimitsConfig{
-		MaxConnections:     100,
-		MaxChannelsPerConn: 10,
+		MaxConnections:     cfg.Limits.MaxConnections,
+		MaxChannelsPerConn: cfg.Limits.MaxChannelsPerConn,
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
