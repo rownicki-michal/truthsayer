@@ -40,16 +40,17 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 | Feature | Status |
 |---|---|
 | Transparent SSH proxy (full PTY, vim/htop/tmux) | 🔧 In progress |
-| Session recording — asciinema v2 `.cast` format | 📅 Planned (Phase 3) |
-| Live session streaming over WebSocket | 📅 Planned (Phase 3) |
-| Command filter with VTE anti-obfuscation | 📅 Planned (Phase 3) |
-| Local LLM intent analysis (Ollama + Mistral 7B) | 📅 Planned (Phase 4) |
-| JIT SSH certificates via HashiCorp Vault | 📅 Planned (Phase 4) |
-| GeoIP impossible travel detection | 📅 Planned (Phase 4) |
-| Admin session takeover & keyboard lock | 📅 Planned (Phase 4) |
-| eBPF kernel-level syscall monitoring | 📅 Planned (Phase 5) |
-| Prometheus metrics + Grafana dashboard | 📅 Planned (Phase 5) |
-| React web panel with live session replay | 📅 Planned (Phase 5) |
+| Password authentication with opaque error messages | ✅ Done |
+| Session recording — asciinema v2 `.cast` format | 🔧 In progress |
+| Live session streaming over WebSocket | 📅 Planned |
+| Command filter with VTE anti-obfuscation | 📅 Planned |
+| Local LLM intent analysis (Ollama + Mistral 7B) | 📅 Planned |
+| JIT SSH certificates via HashiCorp Vault | 📅 Planned |
+| GeoIP impossible travel detection | 📅 Planned |
+| Admin session takeover & keyboard lock | 📅 Planned |
+| eBPF kernel-level syscall monitoring | 📅 Planned |
+| Prometheus metrics + Grafana dashboard | 📅 Planned |
+| React web panel with live session replay | 📅 Planned |
 
 ---
 
@@ -77,47 +78,69 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 ```
 .
 ├── cmd/
-│   ├── truthsayer/main.go       # Bastion server entrypoint
-│   └── agent/main.go            # eBPF agent entrypoint
+│   ├── truthsayer/main.go           # Bastion server entrypoint
+│   └── agent/                       # eBPF agent entrypoint (planned)
 ├── internal/
 │   ├── proxy/
-│   │   ├── server.go            # Inbound SSH listener
-│   │   ├── client.go            # Outbound connection to target
-│   │   └── auth.go              # Authentication callbacks
+│   │   ├── server.go                # Inbound SSH listener, connection limits
+│   │   ├── client.go                # Outbound connection to target server
+│   │   ├── auth.go                  # Authenticator — PasswordCallback
+│   │   └── target_config.go         # TargetConfig DTO
 │   ├── heart/
-│   │   ├── bridge.go            # Stream multiplexer (core data path)
-│   │   └── terminal.go          # PTY and window-change propagation
+│   │   ├── bridge.go                # Bidirectional stream multiplexer
+│   │   └── terminal.go              # PTY and window-change propagation
 │   ├── audit/
-│   │   ├── recorder.go          # .cast session recording
-│   │   └── streamer.go          # Live WebSocket streaming
+│   │   ├── recorder.go              # asciinema v2 .cast session recording
+│   │   └── streamer.go              # Live WebSocket streaming (planned)
 │   ├── security/
-│   │   ├── filter/engine.go     # Command filter (regex + Aho-Corasick)
-│   │   ├── emulation/vte.go     # ANSI parser (anti-obfuscation)
-│   │   ├── behavior/analyzer.go # Leaky bucket anomaly detection
-│   │   ├── geo/checker.go       # GeoIP impossible travel
-│   │   └── ai/agent.go          # Local LLM sidecar
-│   ├── ca/signer.go             # JIT certificate issuance
-│   ├── models/interfaces.go     # Core interfaces (Recorder, Filter, ...)
-│   └── store/database.go        # PostgreSQL session store
-├── pkg/ptyutil/                 # PTY/ANSI helpers
-├── api/                         # gRPC proto (Bastion <-> eBPF Agent)
-├── web/ui/                      # React admin panel
-├── migrations/                  # PostgreSQL schema migrations
+│   │   ├── filter/
+│   │   │   ├── engine.go            # Command filter — regex + Aho-Corasick
+│   │   │   └── interceptor.go       # Bridge stdin interceptor
+│   │   ├── emulation/
+│   │   │   └── vte.go               # ANSI/VTE decoder (anti-obfuscation)
+│   │   ├── behavior/
+│   │   │   └── analyzer.go          # Leaky bucket + AI intent analysis
+│   │   └── bpf/                     # eBPF hooks (planned)
+│   ├── identity/
+│   │   ├── provider.go              # Identity provider interface
+│   │   └── ldap.go                  # LDAP/AD integration (planned)
+│   ├── ca/
+│   │   └── signer.go                # JIT certificate issuance via Vault
+│   ├── config/
+│   │   └── config.go                # Config loading — viper, YAML + env vars
+│   ├── secrets/
+│   │   └── vault.go                 # HashiCorp Vault client
+│   ├── observability/
+│   │   └── metrics.go               # Prometheus metrics
+│   ├── api_impl/
+│   │   └── service.go               # gRPC service implementation
+│   ├── models/
+│   │   └── interfaces.go            # Core interfaces (Recorder, Filter, ...)
+│   └── store/
+│       └── db.go                    # PostgreSQL session store
+├── pkg/
+│   ├── ebpf/
+│   │   └── loader.go                # eBPF program loader
+│   └── ptyutil/
+│       └── ansi.go                  # PTY / ANSI helpers
+├── api/                             # gRPC proto definitions (Bastion <-> Agent)
+├── tests/
+│   ├── e2e_login_test.go            # End-to-end: client → bastion → target
+│   └── e2e_filter_test.go           # End-to-end: blocked command flow
+├── web/ui/                          # React admin panel (planned)
 ├── config.yaml
 ├── go.mod
-└── roadmap                      # Detailed technical roadmap
+└── go.sum
 ```
 
 ---
 
 ## Getting Started
 
-> **Note:** Truthsayer is under active development. The SSH proxy core is currently being built (Phase 1). The instructions below describe the target setup.
-
 ### Prerequisites
 
 - Go 1.22+
-- An SSH host key (for the bastion server identity)
+- An SSH host key for the bastion server identity
 
 ```bash
 ssh-keygen -t ed25519 -f ./certs/truthsayer_host_key -N ""
@@ -135,8 +158,13 @@ go build ./cmd/truthsayer
 
 ### Configuration
 
+Copy the example config and adjust to your environment:
+
+```bash
+cp internal/config/config.yaml.example config.yaml
+```
+
 ```yaml
-# config.yaml
 server:
   port: 2222
   host: "0.0.0.0"
@@ -146,11 +174,22 @@ target:
   default_addr: "192.168.1.100:22"
   default_user: "admin"
 
+auth:
+  users:
+    alice: "password123"   # plaintext for dev — hash for production
+
+limits:
+  max_connections: 100
+  max_channels_per_conn: 10
+
 security:
   session_timeout: 3600
+  blacklist:
+    - "rm -rf /"
+    - "mkfs"
 
 audit:
-  storage_path: "./logs/audit_recordings"
+  storage_path: "./logs/sessions"
   log_level: "info"
 ```
 
@@ -161,6 +200,10 @@ audit:
 | `TRUTHSAYER_PORT` | Override server port |
 | `TRUTHSAYER_HOST` | Override bind address |
 | `TRUTHSAYER_HOST_KEY` | Path to host key file |
+| `TARGET_ADDR` | Override target server address |
+| `TARGET_USER` | Override target username |
+| `AUDIT_STORAGE` | Override session recording path |
+| `LOG_LEVEL` | Override log level |
 
 ### Connect
 
@@ -172,29 +215,37 @@ ssh -p 2222 youruser@bastion-host
 
 ## Development
 
+### Setup
+
+After cloning, enable Git hooks:
+
 ```bash
-# Run tests with race detector
+git config core.hooksPath .githooks
+go install honnef.co/go/tools/cmd/staticcheck@latest
+```
+
+The pre-commit hook runs `gofmt`, `go vet`, `staticcheck`, and `go test -race` before every commit.
+
+### Running Tests
+
+```bash
+# All packages with race detector
 go test -race ./...
 
-# Run a specific package
+# Specific package
 go test -race ./internal/proxy/...
+
+# With verbose output
+go test -race -v ./internal/audit/...
 ```
 
 ### Testing Philosophy
 
 Every public interface is tested in isolation using in-memory transports:
 
-- `net.Pipe()` — simulates TCP connections without network
-- `io.Pipe()` — verifies data flow through the bridge
-- `testcontainers-go` — integration tests against real PostgreSQL
-
----
-
-## Roadmap
-
-See [`roadmap`](./roadmap) for the full technical roadmap including all 6 development phases, milestones, risk analysis, and SLA targets.
-
-**Current phase:** Phase 1 — SSH proxy core
+- `net.Listener` on `127.0.0.1:0` — real TCP on a random port, avoids `net.Pipe()` deadlocks
+- `io.Pipe()` / `bytes.Buffer` — verifies data flow through the bridge without SSH overhead
+- `testcontainers-go` — integration tests against real PostgreSQL (planned)
 
 ---
 
@@ -202,9 +253,9 @@ See [`roadmap`](./roadmap) for the full technical roadmap including all 6 develo
 
 Truthsayer is itself a security-critical component. A few design decisions worth noting:
 
-- **Passwords are never logged.** The `PasswordCallback` captures credentials only to establish the outbound connection, then zeroes the memory.
+- **Passwords are never logged.** The `PasswordCallback` captures credentials only to verify identity. Error messages are identical for wrong password and unknown user to prevent enumeration attacks.
 - **Session data stays local.** The AI analysis runs entirely via a local Ollama instance. No command data is sent to any external API.
-- **HostKey verification** is planned via HashiCorp Vault PKI (Milestone M4.5). Until then, builds are not suitable for production.
+- **Host key verification** is planned via HashiCorp Vault PKI. Until then, builds are not suitable for production use.
 
 Found a vulnerability? Please open a private security advisory rather than a public issue.
 
