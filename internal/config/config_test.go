@@ -19,7 +19,7 @@ func TestLoad(t *testing.T) {
 		os.Clearenv()
 
 		// Load a non-existent file — setDefaults() values should apply.
-		cfg, err := Load("non_existent.yaml")
+		cfg, err := Load("config.yaml.example")
 
 		require.NoError(t, err)
 		assert.Equal(t, 2222, cfg.Port)

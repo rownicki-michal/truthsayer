@@ -15,4 +15,4 @@ security:
 
 audit:
   storage_path: "./logs/sessions"
-  log_level: "debug"
+  log_level: "info"
