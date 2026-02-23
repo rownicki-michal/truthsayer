@@ -16,11 +16,51 @@ import (
 // Helpers
 // =============================================================================
 
+type outputBuffer interface {
+	io.Writer
+	String() string
+	Len() int
+	Bytes() []byte
+}
+
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (s *safeBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *safeBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+func (s *safeBuffer) Len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Len()
+}
+
+func (s *safeBuffer) Bytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	b := s.buf.Bytes()
+	out := make([]byte, len(b))
+	copy(out, b)
+	return out
+}
+
 // pipe creates a pair of connected buffers simulating a bidirectional stream.
 // readWriter.Read() reads from src, readWriter.Write() writes to dst.
 type pipeReadWriter struct {
 	src *bytes.Buffer // data to be read by Read()
-	dst *bytes.Buffer // data written by Write()
+	dst io.Writer     // data written by Write()
 }
 
 func (p *pipeReadWriter) Read(b []byte) (int, error) {
@@ -79,9 +119,9 @@ func (w *writeCloser) WasClosed() bool {
 func newBridgeFixture(clientInput, targetStdoutData, targetStderrData string) (
 	b *Bridge,
 	targetStdin *writeCloser,
-	clientOutput *bytes.Buffer,
+	clientOutput outputBuffer,
 ) {
-	clientOutput = &bytes.Buffer{}
+	clientOutput = &safeBuffer{}
 
 	// client: Read() returns clientInput, Write() goes to clientOutput
 	client := &pipeReadWriter{
