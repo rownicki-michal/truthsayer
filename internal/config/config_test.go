@@ -77,4 +77,24 @@ server:
 		_, err = Load(configPath)
 		assert.Error(t, err)
 	})
+
+	t.Run("loads auth users from YAML", func(t *testing.T) {
+		os.Clearenv()
+
+		yamlContent := `
+auth:
+  users:
+    alice: "password123"
+    bob: "password456"
+`
+		err := os.WriteFile(configPath, []byte(yamlContent), 0644)
+		require.NoError(t, err)
+
+		cfg, err := Load(configPath)
+
+		require.NoError(t, err)
+		require.Len(t, cfg.Auth.Users, 2)
+		assert.Equal(t, "password123", cfg.Auth.Users["alice"])
+		assert.Equal(t, "password456", cfg.Auth.Users["bob"])
+	})
 }
