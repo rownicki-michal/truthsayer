@@ -13,14 +13,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
+
+	"truthsayer/internal/config"
 )
 
 // =============================================================================
-// Helpers — współdzielone między server_test.go i client_test.go
+// Helpers
 // =============================================================================
 
-// generateHostKey tworzy efemeryczny klucz RSA do testów.
-// Nigdy nie używaj w produkcji — klucz nie jest persystowany.
 func generateHostKey(t *testing.T) ssh.Signer {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -30,31 +30,23 @@ func generateHostKey(t *testing.T) ssh.Signer {
 	return signer
 }
 
-// minimalAuth returns a minimal AuthConfig with one user — used in tests
-// that do not exercise authentication logic but require a valid AuthConfig
-// because NewAuthenticator rejects empty user maps.
 func minimalAuth() AuthConfig {
 	return AuthConfig{Users: map[string]string{"testuser": "testpass"}}
 }
 
-// newTestServer tworzy SSHServer z minimalnymi ustawieniami.
-// Nie uruchamia serwera — tylko inicjalizuje strukturę.
 func newTestServer(t *testing.T, auth AuthConfig, target TargetConfig, limits LimitsConfig) *SSHServer {
 	t.Helper()
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("127.0.0.1:0", hostKey, auth, target, limits)
+	s, err := NewSSHServer("127.0.0.1:0", hostKey, auth, target, limits, config.Security{})
 	require.NoError(t, err)
 	return s
 }
 
-// startServer uruchamia SSHServer na losowym porcie i rejestruje cleanup.
-// Tworzy listener ręcznie przed startem gorutyny — adres jest znany od razu,
-// bez time.Sleep i bez race condition.
 func startServer(t *testing.T, auth AuthConfig, limits LimitsConfig) string {
 	t.Helper()
 
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("127.0.0.1:0", hostKey, auth, TargetConfig{}, limits)
+	s, err := NewSSHServer("127.0.0.1:0", hostKey, auth, TargetConfig{}, limits, config.Security{})
 	require.NoError(t, err)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -69,19 +61,12 @@ func startServer(t *testing.T, auth AuthConfig, limits LimitsConfig) string {
 	return addr
 }
 
-// serverConfigFor wyciąga *ssh.ServerConfig z nowo zbudowanego SSHServer.
-// Używane do testowania PasswordCallback przez dialWithPassword.
 func serverConfigFor(t *testing.T, auth AuthConfig) *ssh.ServerConfig {
 	t.Helper()
 	s := newTestServer(t, auth, TargetConfig{}, LimitsConfig{})
 	return s.config
 }
 
-// dialWithPassword wykonuje SSH handshake z hasłem przez dedykowany tcp listener.
-//
-// Nie używamy net.Pipe() — jego synchroniczne (niebuforowane) zapisy powodują
-// deadlock gdy obie strony próbują wysłać SSH version banner jednocześnie.
-// Dedykowany listener na losowym porcie eliminuje ten problem.
 func dialWithPassword(t *testing.T, serverConfig *ssh.ServerConfig, user, pass string) error {
 	t.Helper()
 
@@ -175,7 +160,7 @@ func TestIsListenerClosed_RealListener(t *testing.T) {
 }
 
 // =============================================================================
-// NewSSHServer — inicjalizacja
+// NewSSHServer
 // =============================================================================
 
 func TestNewSSHServer_SemaphoreNilWhenNoLimit(t *testing.T) {
@@ -202,9 +187,8 @@ func TestNewSSHServer_ServerVersionSet(t *testing.T) {
 }
 
 func TestNewSSHServer_InvalidAddrDoesNotFail(t *testing.T) {
-	// NewSSHServer nie binduje portu — robi to Start().
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("256.256.256.256:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{})
+	s, err := NewSSHServer("256.256.256.256:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{}, config.Security{})
 	assert.NoError(t, err)
 	assert.NotNil(t, s)
 }
@@ -319,7 +303,7 @@ func TestActiveConns_MaxCapacity(t *testing.T) {
 }
 
 // =============================================================================
-// Semafor — mechanizm limitowania połączeń
+// Semafor
 // =============================================================================
 
 func TestSemaphore_RejectsWhenFull(t *testing.T) {
@@ -331,7 +315,6 @@ func TestSemaphore_RejectsWhenFull(t *testing.T) {
 	case s.connSem <- struct{}{}:
 		t.Fatal("semafor pełny — trzeci slot nie powinien być dostępny")
 	default:
-		// poprawnie odrzucone
 	}
 }
 
@@ -342,7 +325,6 @@ func TestSemaphore_AllowsAfterRelease(t *testing.T) {
 
 	select {
 	case s.connSem <- struct{}{}:
-		// poprawnie — slot dostępny po zwolnieniu
 	default:
 		t.Fatal("slot powinien być dostępny po zwolnieniu")
 	}
@@ -377,22 +359,20 @@ func TestSemaphore_ConcurrentAcquire(t *testing.T) {
 }
 
 // =============================================================================
-// Start — lifecycle i graceful shutdown
+// Start
 // =============================================================================
 
 func TestStart_ShutdownOnContextCancel(t *testing.T) {
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("127.0.0.1:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{})
+	s, err := NewSSHServer("127.0.0.1:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{}, config.Security{})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- s.Start(ctx) }()
 
-	// Wait until Start() has bound the port — race-free, no polling.
 	select {
 	case <-s.Ready():
-		// listener is bound and accepting
 	case <-time.After(2 * time.Second):
 		t.Fatal("server did not become ready within 2s")
 	}
@@ -409,7 +389,7 @@ func TestStart_ShutdownOnContextCancel(t *testing.T) {
 
 func TestStart_FailsOnInvalidAddr(t *testing.T) {
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("256.256.256.256:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{})
+	s, err := NewSSHServer("256.256.256.256:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{}, config.Security{})
 	require.NoError(t, err)
 	assert.Error(t, s.Start(context.Background()))
 }
@@ -420,7 +400,7 @@ func TestStart_FailsOnOccupiedPort(t *testing.T) {
 	t.Cleanup(func() { blocker.Close() })
 
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer(blocker.Addr().String(), hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{})
+	s, err := NewSSHServer(blocker.Addr().String(), hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{}, config.Security{})
 	require.NoError(t, err)
 	assert.Error(t, s.Start(context.Background()))
 }

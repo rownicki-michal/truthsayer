@@ -44,9 +44,15 @@ type Limits struct {
 	MaxChannelsPerConn int `mapstructure:"max_channels_per_conn"`
 }
 
+// Security holds command filtering configuration.
 type Security struct {
 	Blacklist      []string `mapstructure:"blacklist"`
 	SessionTimeout int      `mapstructure:"session_timeout"`
+
+	// OnBlock controls what happens when a command is blocked by the filter.
+	// "message"    — session continues, client receives an error message (default)
+	// "disconnect" — session is terminated immediately
+	OnBlock string `mapstructure:"on_block"`
 }
 
 type Audit struct {
@@ -75,8 +81,6 @@ func Load(configPath string) (*Config, error) {
 	setDefaults(v)
 
 	if err := v.ReadInConfig(); err != nil {
-		// When using SetConfigFile, viper returns *os.PathError for missing files
-		// rather than ConfigFileNotFoundError — check using os.IsNotExist instead.
 		if !isNotFound(err) {
 			return nil, fmt.Errorf("failed to read config file: %w", err)
 		}
@@ -91,8 +95,6 @@ func Load(configPath string) (*Config, error) {
 }
 
 // isNotFound returns true when err indicates the config file does not exist.
-// Viper returns ConfigFileNotFoundError only when using SetConfigName + AddConfigPath.
-// When using SetConfigFile it returns *os.PathError — handle both cases.
 func isNotFound(err error) bool {
 	if _, ok := err.(viper.ConfigFileNotFoundError); ok {
 		return true
@@ -110,6 +112,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("limits.max_connections", 100)
 	v.SetDefault("limits.max_channels_per_conn", 10)
 	v.SetDefault("security.session_timeout", 3600)
+	v.SetDefault("security.on_block", "message")
 	v.SetDefault("audit.storage_path", "./logs/sessions")
 	v.SetDefault("audit.log_level", "info")
 }

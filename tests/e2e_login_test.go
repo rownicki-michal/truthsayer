@@ -16,14 +16,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/ssh"
 
+	"truthsayer/internal/config"
 	"truthsayer/internal/proxy"
 )
 
-// =============================================================================
-// Helpers
-// =============================================================================
-
-// generateSigner creates an ephemeral RSA key for test servers.
 func generateSigner(t *testing.T) ssh.Signer {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -33,9 +29,6 @@ func generateSigner(t *testing.T) ssh.Signer {
 	return signer
 }
 
-// startTargetSSHServer starts a minimal SSH server that executes commands
-// and returns their output. Represents the "target" server behind the bastion.
-// Returns the address and host key for use in TargetConfig.
 func startTargetSSHServer(t *testing.T, user, pass string) (addr string, hostKey ssh.PublicKey) {
 	t.Helper()
 
@@ -70,8 +63,6 @@ func startTargetSSHServer(t *testing.T, user, pass string) (addr string, hostKey
 	return addr, hostKey
 }
 
-// handleTargetConn handles a single connection on the target SSH server.
-// Supports only exec requests — returns the command output to the client.
 func handleTargetConn(conn net.Conn, cfg *ssh.ServerConfig) {
 	defer conn.Close()
 
@@ -94,8 +85,6 @@ func handleTargetConn(conn net.Conn, cfg *ssh.ServerConfig) {
 		}
 
 		go func(ch ssh.Channel, requests <-chan *ssh.Request) {
-			// Do NOT use defer ch.Close() here — it would race with
-			// exit-status delivery. We close explicitly after SendRequest.
 			for req := range requests {
 				if req.Type != "exec" {
 					req.Reply(false, nil)
@@ -130,7 +119,6 @@ func handleTargetConn(conn net.Conn, cfg *ssh.ServerConfig) {
 					io.Copy(ch.Stderr(), stderrPipe)
 				}()
 
-				// Wait for all output to be copied before signalling EOF.
 				copyWg.Wait()
 
 				exitCode := 0
@@ -140,12 +128,8 @@ func handleTargetConn(conn net.Conn, cfg *ssh.ServerConfig) {
 					}
 				}
 
-				// Send exit-status BEFORE closing — client must receive
-				// it while the channel is still open.
 				exitStatus := struct{ Status uint32 }{uint32(exitCode)}
 				ch.SendRequest("exit-status", false, ssh.Marshal(exitStatus))
-
-				// Small yield to allow exit-status to be flushed before close.
 				time.Sleep(10 * time.Millisecond)
 				ch.Close()
 				return
@@ -154,10 +138,6 @@ func handleTargetConn(conn net.Conn, cfg *ssh.ServerConfig) {
 	}
 }
 
-// simulateCommand removed — using exec.Command("sh", "-c", cmd) instead.
-
-// startBastion starts the Truthsayer bastion and returns its address.
-// Blocks until the bastion is ready to accept connections.
 func startBastion(t *testing.T, targetAddr, targetUser, targetPass string) string {
 	t.Helper()
 
@@ -170,8 +150,9 @@ func startBastion(t *testing.T, targetAddr, targetUser, targetPass string) strin
 		Password: targetPass,
 	}
 	limits := proxy.LimitsConfig{}
+	security := config.Security{} // empty blacklist — no commands blocked in login tests
 
-	srv, err := proxy.NewSSHServer("127.0.0.1:0", generateSigner(t), auth, target, limits)
+	srv, err := proxy.NewSSHServer("127.0.0.1:0", generateSigner(t), auth, target, limits, security)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -179,7 +160,6 @@ func startBastion(t *testing.T, targetAddr, targetUser, targetPass string) strin
 
 	go srv.Start(ctx) //nolint:errcheck
 
-	// Wait until bastion is ready — race-free via Ready() channel.
 	select {
 	case <-srv.Ready():
 	case <-time.After(3 * time.Second):
@@ -189,10 +169,6 @@ func startBastion(t *testing.T, targetAddr, targetUser, targetPass string) strin
 	return srv.Addr()
 }
 
-// execOverBastion connects to the bastion, runs a command via exec,
-// and returns the combined output.
-// Each call opens a fresh TCP connection to the bastion to avoid
-// shared state between test cases.
 func execOverBastion(t *testing.T, bastionAddr, user, pass, command string) string {
 	t.Helper()
 
@@ -211,8 +187,6 @@ func execOverBastion(t *testing.T, bastionAddr, user, pass, command string) stri
 	require.NoError(t, err, "failed to open session")
 	defer session.Close()
 
-	// Output() runs the command and collects stdout.
-	// It waits for the remote process to exit — handles exit-status internally.
 	out, err := session.Output(command)
 	require.NoError(t, err, "command failed")
 
@@ -224,15 +198,9 @@ func execOverBastion(t *testing.T, bastionAddr, user, pass, command string) stri
 // =============================================================================
 
 func TestE2E_LoginAndExec(t *testing.T) {
-	// Start target SSH server.
 	targetAddr, _ := startTargetSSHServer(t, "targetuser", "targetpass")
-
-	// Start bastion pointing at the target.
 	bastionAddr := startBastion(t, targetAddr, "targetuser", "targetpass")
-
-	// Connect through bastion and run a command.
 	output := execOverBastion(t, bastionAddr, "testuser", "testpass", "echo hello")
-
 	assert.Equal(t, "hello\n", output)
 }
 
@@ -248,7 +216,7 @@ func TestE2E_WrongPasswordRejected(t *testing.T) {
 	}
 
 	_, err := ssh.Dial("tcp", bastionAddr, cfg)
-	assert.Error(t, err, "wrong password should be rejected by bastion")
+	assert.Error(t, err)
 }
 
 func TestE2E_UnknownUserRejected(t *testing.T) {
@@ -263,14 +231,13 @@ func TestE2E_UnknownUserRejected(t *testing.T) {
 	}
 
 	_, err := ssh.Dial("tcp", bastionAddr, cfg)
-	assert.Error(t, err, "unknown user should be rejected by bastion")
+	assert.Error(t, err)
 }
 
 func TestE2E_MultipleCommands(t *testing.T) {
 	targetAddr, _ := startTargetSSHServer(t, "targetuser", "targetpass")
 	bastionAddr := startBastion(t, targetAddr, "targetuser", "targetpass")
 
-	// Each session.Run() opens a new exec channel — verify multiple work.
 	commands := []struct {
 		cmd      string
 		expected string
@@ -289,7 +256,6 @@ func TestE2E_MultipleCommands(t *testing.T) {
 }
 
 func TestE2E_TargetUnavailable(t *testing.T) {
-	// Point bastion at a port nothing is listening on.
 	bastionAddr := startBastion(t, "127.0.0.1:1", "targetuser", "targetpass")
 
 	cfg := &ssh.ClientConfig{
@@ -300,14 +266,13 @@ func TestE2E_TargetUnavailable(t *testing.T) {
 	}
 
 	client, err := ssh.Dial("tcp", bastionAddr, cfg)
-	require.NoError(t, err, "bastion auth should succeed even if target is down")
+	require.NoError(t, err)
 	defer client.Close()
 
-	// Opening a session should fail because target is unreachable.
 	session, err := client.NewSession()
 	if err == nil {
 		err = session.Run("echo hello")
 		session.Close()
 	}
-	assert.Error(t, err, "session should fail when target is unavailable")
+	assert.Error(t, err)
 }

@@ -18,6 +18,10 @@ type Bridge struct {
 	targetStdin  io.WriteCloser // target session stdin
 	targetStdout io.Reader      // target session stdout
 	targetStderr io.Reader      // target session stderr
+
+	// filter intercepts client stdin before it reaches targetStdin.
+	// When nil, bytes are copied directly to targetStdin (no filtering).
+	filter io.Writer
 }
 
 // NewBridge creates a new Bridge instance.
@@ -40,24 +44,30 @@ func NewBridge(
 	}
 }
 
+// WithFilter attaches a FilterWriter to the bridge. Client stdin bytes will
+// be written to fw instead of directly to targetStdin. fw is responsible for
+// forwarding allowed bytes to targetStdin and dropping blocked commands.
+//
+// Call before Run().
+func (b *Bridge) WithFilter(fw io.Writer) {
+	b.filter = fw
+}
+
 // Run starts the bridge and blocks until all streams are done.
 //
 // Three goroutines run concurrently:
 //   - target stdout → client
 //   - target stderr → client
-//   - client stdin  → target stdin
+//   - client stdin  → filter (if set) or targetStdin
 //
 // The stdin goroutine drains all client input but is also unblocked
 // when both output streams finish — this prevents deadlocks during
 // exec commands where the client never closes its stdin explicitly.
-//
-// Phase 3 injection point marked with TODO below.
 func (b *Bridge) Run() {
 	var wg sync.WaitGroup
 	wg.Add(3)
 
 	// outputDone is closed when both stdout and stderr are exhausted.
-	// Used to unblock stdin when the remote process exits.
 	outputDone := make(chan struct{})
 	var outputWg sync.WaitGroup
 	outputWg.Add(2)
@@ -86,22 +96,16 @@ func (b *Bridge) Run() {
 		close(outputDone)
 	}()
 
-	// Client stdin → target stdin
-	//
-	// TODO (Phase 3): Replace with:
-	//   tee      := io.TeeReader(b.client, recorder)
-	//   filtered := filter.WrapReader(tee)
-	//   io.Copy(b.targetStdin, filtered)
-	//
-	// Runs the copy in a separate goroutine so outputDone can unblock
-	// it by closing targetStdin when the remote process exits.
+	// Client stdin → filter (if set) or targetStdin directly.
 	go func() {
 		defer wg.Done()
+
+		dst := b.stdinDst()
 
 		copyDone := make(chan struct{})
 		go func() {
 			defer close(copyDone)
-			io.Copy(b.targetStdin, b.client)
+			io.Copy(dst, b.client)
 		}()
 
 		select {
@@ -117,4 +121,13 @@ func (b *Bridge) Run() {
 	}()
 
 	wg.Wait()
+}
+
+// stdinDst returns the destination writer for client stdin.
+// If a filter is attached it takes priority, otherwise targetStdin is used.
+func (b *Bridge) stdinDst() io.Writer {
+	if b.filter != nil {
+		return b.filter
+	}
+	return b.targetStdin
 }
