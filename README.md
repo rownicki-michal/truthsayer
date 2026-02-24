@@ -28,7 +28,7 @@
 
 Traditional SSH jump servers are blind. They forward traffic but have no awareness of what users actually do. Truthsayer changes that:
 
-- **Sees through obfuscation** — a VTE terminal emulator processes raw bytes before the filter, so `r\m -rf /` is caught the same as `rm -rf /`
+- **Sees through obfuscation** — a VTE terminal emulator processes raw bytes before the filter, so `rm\033[A -rf /` is caught the same as `rm -rf /`
 - **Local AI analysis** — a local LLM (Mistral 7B via Ollama) analyzes command buffers asynchronously. No session data ever reaches an external API
 - **Kernel-level visibility** — an eBPF agent on target servers captures `execve`, `open`, and `connect` syscalls, providing visibility beyond what SSH exposes
 - **Live intervention** — admins can observe sessions in real time, lock user input, or take over the keyboard entirely
@@ -39,18 +39,19 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 
 | Feature | Status |
 |---|---|
-| Transparent SSH proxy (full PTY, vim/htop/tmux) | 🔧 In progress |
-| Password authentication with opaque error messages | ✅ Done |
-| Session recording — asciinema v2 `.cast` format | 🔧 In progress |
-| Live session streaming over WebSocket | 📅 Planned |
-| Command filter with VTE anti-obfuscation | 📅 Planned |
-| Local LLM intent analysis (Ollama + Mistral 7B) | 📅 Planned |
-| JIT SSH certificates via HashiCorp Vault | 📅 Planned |
-| GeoIP impossible travel detection | 📅 Planned |
-| Admin session takeover & keyboard lock | 📅 Planned |
-| eBPF kernel-level syscall monitoring | 📅 Planned |
-| Prometheus metrics + Grafana dashboard | 📅 Planned |
-| React web panel with live session replay | 📅 Planned |
+| Transparent SSH proxy (exec + shell sessions)     | ✅ Done        |
+| Password authentication with opaque error messages | ✅ Done        |
+| VTE terminal decoder (anti-obfuscation)           | ✅ Done        |
+| Session recording — asciinema v2 `.cast` format   | 🔧 In progress |
+| Command filter engine (Aho-Corasick)              | 🔧 In progress |
+| Live session streaming over WebSocket             | 📅 Planned     |
+| Local LLM intent analysis (Ollama + Mistral 7B)   | 📅 Planned     |
+| JIT SSH certificates via HashiCorp Vault          | 📅 Planned     |
+| GeoIP impossible travel detection                 | 📅 Planned     |
+| Admin session takeover & keyboard lock            | 📅 Planned     |
+| eBPF kernel-level syscall monitoring              | 📅 Planned     |
+| Prometheus metrics + Grafana dashboard            | 📅 Planned     |
+| React web panel with live session replay          | 📅 Planned     |
 
 ---
 
@@ -60,7 +61,7 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 |---|---|
 | Language | Go 1.22+ |
 | SSH Protocol | `golang.org/x/crypto/ssh` |
-| Terminal Emulation | `github.com/aymanbagabas/go-vte` |
+| Terminal Emulation | `github.com/danielgatis/go-vte` |
 | eBPF Agent | `cilium/ebpf` + Linux LSM hooks |
 | Session Recording | asciinema v2 `.cast` |
 | AI Analysis | Ollama + Mistral 7B (local) |
@@ -89,12 +90,13 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 │   ├── heart/
 │   │   ├── bridge.go                # Bidirectional stream multiplexer
 │   │   └── terminal.go              # PTY and window-change propagation
+│   ├── forwarding/                  # Port forwarding (planned)
 │   ├── audit/
 │   │   ├── recorder.go              # asciinema v2 .cast session recording
 │   │   └── streamer.go              # Live WebSocket streaming (planned)
 │   ├── security/
 │   │   ├── filter/
-│   │   │   ├── engine.go            # Command filter — regex + Aho-Corasick
+│   │   │   ├── engine.go            # Command filter — Aho-Corasick
 │   │   │   └── interceptor.go       # Bridge stdin interceptor
 │   │   ├── emulation/
 │   │   │   └── vte.go               # ANSI/VTE decoder (anti-obfuscation)
@@ -107,7 +109,8 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 │   ├── ca/
 │   │   └── signer.go                # JIT certificate issuance via Vault
 │   ├── config/
-│   │   └── config.go                # Config loading — viper, YAML + env vars
+│   │   ├── config.go                # Config loading — viper, YAML + env vars
+│   │   └── config.yaml.example      # Annotated example configuration
 │   ├── secrets/
 │   │   └── vault.go                 # HashiCorp Vault client
 │   ├── observability/
@@ -124,10 +127,12 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 │   └── ptyutil/
 │       └── ansi.go                  # PTY / ANSI helpers
 ├── api/                             # gRPC proto definitions (Bastion <-> Agent)
+├── backlog/                         # Sprint tickets and roadmap
 ├── tests/
 │   ├── e2e_login_test.go            # End-to-end: client → bastion → target
 │   └── e2e_filter_test.go           # End-to-end: blocked command flow
 ├── web/ui/                          # React admin panel (planned)
+├── Dockerfile
 ├── config.yaml
 ├── go.mod
 └── go.sum
@@ -270,5 +275,14 @@ Apache License 2.0 — see [LICENSE](./LICENSE) for details.
 ## Status
 
 🚧 **Early development — not production ready.**
+
+### Phase 1 — Core Proxy ✅ Complete
+TBAS-001 · TBAS-002 · TBAS-003 · TBAS-004 — Auth, config, bridge, E2E login tests passing.
+
+### Phase 2 — Terminal Emulation 🔧 In progress
+TBAS-101 ✅ VTE decoder with token-based obfuscation detection
+TBAS-102 · TBAS-103 · TBAS-104 — Decoder plugins, tmux/screen, fuzzing.
+
+### Phase 3+ — Filter, AI, eBPF 📅 Planned
 
 The project is being built in the open. Contributions, feedback, and stars are welcome.
