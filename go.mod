@@ -3,12 +3,14 @@ module truthsayer
 go 1.25.2
 
 require (
+	github.com/danielgatis/go-vte v1.0.11
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.48.0
 )
 
 require (
+	github.com/danielgatis/go-utf8 v1.0.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
