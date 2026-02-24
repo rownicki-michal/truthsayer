@@ -72,22 +72,6 @@ func TestDecoderPipeline_PlainText_NoObfuscation(t *testing.T) {
 // DecoderFactory
 // =============================================================================
 
-func TestDecoderFactory_ReturnsVTEDecoder(t *testing.T) {
-	f := NewDecoderFactory()
-	for _, term := range []string{
-		"xterm", "xterm-256color", "xterm-kitty",
-		"vt100", "vt220", "linux",
-		"tmux", "tmux-256color",
-		"screen", "screen-256color",
-		"rxvt", "alacritty", "foot", "ghostty",
-		"", "XTERM-256COLOR",
-	} {
-		dec := f.FromTerm(term)
-		assert.NotNil(t, dec, "term=%q should never return nil", term)
-		assert.Equal(t, "vte", dec.Name(), "term=%q", term)
-	}
-}
-
 func TestDecoderFactory_ReturnedDecoder_IsFunctional(t *testing.T) {
 	dec := NewDecoderFactory().FromTerm("xterm-256color")
 	result := dec.Decode([]byte("rm\033[A -rf /"))

@@ -14,12 +14,23 @@ type DecodeResult struct {
 }
 
 // =============================================================================
+// Decoder — common interface (unexported, used internally by pipeline/factory)
+// =============================================================================
+
+// termDecoder is the minimal internal interface shared by VTEDecoder,
+// DCSDecoder and DecoderPipeline. It is intentionally unexported — callers
+// use concrete types returned by DecoderFactory.
+type termDecoder interface {
+	Decode([]byte) DecodeResult
+	Name() string
+}
+
+// =============================================================================
 // VTEDecoder
 // =============================================================================
 
 // VTEDecoder wraps the low-level Decoder and returns a DecodeResult.
-// It handles VT100, VT220 and xterm escape sequences — the vast majority
-// of what real SSH sessions produce.
+// It handles VT100, VT220 and xterm escape sequences.
 type VTEDecoder struct {
 	d *Decoder
 }
@@ -46,19 +57,18 @@ func (v *VTEDecoder) Name() string { return "vte" }
 // DecoderPipeline
 // =============================================================================
 
-// DecoderPipeline applies a list of VTEDecoders in order.
+// DecoderPipeline applies a list of decoders in order.
 // Each decoder receives the Visible output of the previous one as its input.
 // HasObfuscation is true if any decoder in the chain detected obfuscation.
 //
-// Useful for stacking specialised decoders — for example a TmuxDecoder
-// that strips DCS wrappers followed by a VTEDecoder that processes the
-// inner terminal data (TBAS-103).
+// Typical use: DCSDecoder strips tmux/screen wrappers, then VTEDecoder
+// processes the inner terminal sequences.
 type DecoderPipeline struct {
-	decoders []*VTEDecoder
+	decoders []termDecoder
 }
 
 // NewDecoderPipeline creates a pipeline from the provided decoders.
-func NewDecoderPipeline(decoders ...*VTEDecoder) *DecoderPipeline {
+func NewDecoderPipeline(decoders ...termDecoder) *DecoderPipeline {
 	return &DecoderPipeline{decoders: decoders}
 }
 
