@@ -99,9 +99,12 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 │   │   │   ├── engine.go            # Command filter — Aho-Corasick
 │   │   │   └── interceptor.go       # Bridge stdin interceptor
 │   │   ├── emulation/
-│   │   │   └── vte.go               # ANSI/VTE decoder (anti-obfuscation)
+│   │   │   ├── vte.go               # VTE state machine — tokens, Apply, HasObfuscation
+│   │   │   ├── decoder.go           # VTEDecoder, DecoderPipeline, DecodeResult
+│   │   │   ├── dcs.go               # DCSDecoder — strips tmux/screen DCS wrappers
+│   │   │   └── factory.go           # DecoderFactory — selects decoder from $TERM
 │   │   ├── behavior/
-│   │   │   └── analyzer.go          # Leaky bucket + AI intent analysis
+│   │   │   └── analyzer.go          # Leaky bucket + AI intent analysis (planned)
 │   │   └── bpf/                     # eBPF hooks (planned)
 │   ├── identity/
 │   │   ├── provider.go              # Identity provider interface
@@ -279,10 +282,16 @@ Apache License 2.0 — see [LICENSE](./LICENSE) for details.
 ### Phase 1 — Core Proxy ✅ Complete
 TBAS-001 · TBAS-002 · TBAS-003 · TBAS-004 — Auth, config, bridge, E2E login tests passing.
 
-### Phase 2 — Terminal Emulation 🔧 In progress
+### Phase 2 — Terminal Emulation ✅ Complete
 TBAS-101 ✅ VTE decoder with token-based obfuscation detection
-TBAS-102 · TBAS-103 · TBAS-104 — Decoder plugins, tmux/screen, fuzzing.
+TBAS-102 ✅ VTEDecoder, DecoderPipeline, DecoderFactory
+TBAS-103 ✅ DCS decoder for tmux/screen
+TBAS-104 ✅ Fuzz tests for VTE and DCS decoders
 
-### Phase 3+ — Filter, AI, eBPF 📅 Planned
+### Phase 3 — Security Filter Engine 🔧 In progress
+TBAS-201 — Filter engine (Aho-Corasick)
+TBAS-202 · TBAS-203 — Filter in bridge, E2E filter test.
+
+### Phase 4+ — AI, eBPF, Identity 📅 Planned
 
 The project is being built in the open. Contributions, feedback, and stars are welcome.
