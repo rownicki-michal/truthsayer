@@ -256,7 +256,7 @@ func TestE2E_MultipleCommands(t *testing.T) {
 }
 
 func TestE2E_TargetUnavailable(t *testing.T) {
-	bastionAddr := startBastion(t, "127.0.0.1:1", "targetuser", "targetpass")
+	bastionAddr := startBastion(t, "127.0.0.1:0", "targetuser", "targetpass")
 
 	cfg := &ssh.ClientConfig{
 		User:            "testuser",
