@@ -365,13 +365,23 @@ func (s *SSHServer) handleSession(
 			req.Reply(true, nil)
 			log.Printf("[SESSION] exec: %q", execPayload.Command)
 
+			decoder := emulation.NewDecoderFactory().FromTerm(ptyReq.Term)
+			result := decoder.Decode([]byte(execPayload.Command))
+			decision := s.filterEngine.Inspect(result.Visible)
+			if decision.Block {
+				msg := fmt.Sprintf("truthsayer: command blocked by policy: %s\r\n", decision.Reason)
+				io.WriteString(clientChan, msg)
+				exitStatus := struct{ Status uint32 }{1}
+				clientChan.SendRequest("exit-status", false, ssh.Marshal(exitStatus))
+				return
+			}
+
 			if err := targetSession.Start(execPayload.Command); err != nil {
 				log.Printf("[SESSION] Failed to exec %q: %v", execPayload.Command, err)
 				return
 			}
 
 			bridge := heart.NewBridge(clientChan, targetStdin, targetStdout, targetStderr)
-			bridge.WithFilter(s.newFilterWriter(targetStdin, clientChan, ptyReq.Term))
 
 			waitErr := make(chan error, 1)
 			go func() {
