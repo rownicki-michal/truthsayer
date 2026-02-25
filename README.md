@@ -13,7 +13,7 @@
                   │                  │◄──────
                   │  ┌────────────┐  │
                   │  │  Bridge    │  │  ◄── full PTY, stdin/stdout/stderr
-                  │  │  + Filter  │  │
+                  │  │  + Filter  │  │  ◄── exec + PTY-aware shell filtering
                   │  │  + AI      │  │  ◄── local Ollama, async, non-blocking
                   │  │  + eBPF    │  │  ◄── kernel-level syscall visibility
                   │  └────────────┘  │
@@ -29,6 +29,7 @@
 Traditional SSH jump servers are blind. They forward traffic but have no awareness of what users actually do. Truthsayer changes that:
 
 - **Sees through obfuscation** — a VTE terminal emulator processes raw bytes before the filter, so `rm\033[A -rf /` is caught the same as `rm -rf /`
+- **Filters interactive sessions** — PTY-aware filter intercepts commands in real-time shell sessions without breaking echo or line editing
 - **Local AI analysis** — a local LLM (Mistral 7B via Ollama) analyzes command buffers asynchronously. No session data ever reaches an external API
 - **Kernel-level visibility** — an eBPF agent on target servers captures `execve`, `open`, and `connect` syscalls, providing visibility beyond what SSH exposes
 - **Live intervention** — admins can observe sessions in real time, lock user input, or take over the keyboard entirely
@@ -39,19 +40,20 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 
 | Feature | Status |
 |---|---|
-| Transparent SSH proxy (exec + shell sessions)     | ✅ Done        |
-| Password authentication with opaque error messages | ✅ Done        |
-| VTE terminal decoder (anti-obfuscation)           | ✅ Done        |
-| Session recording — asciinema v2 `.cast` format   | 🔧 In progress |
-| Command filter engine (Aho-Corasick)              | 🔧 In progress |
-| Live session streaming over WebSocket             | 📅 Planned     |
-| Local LLM intent analysis (Ollama + Mistral 7B)   | 📅 Planned     |
-| JIT SSH certificates via HashiCorp Vault          | 📅 Planned     |
-| GeoIP impossible travel detection                 | 📅 Planned     |
-| Admin session takeover & keyboard lock            | 📅 Planned     |
-| eBPF kernel-level syscall monitoring              | 📅 Planned     |
-| Prometheus metrics + Grafana dashboard            | 📅 Planned     |
-| React web panel with live session replay          | 📅 Planned     |
+| Transparent SSH proxy (exec + shell sessions) | ✅ Done |
+| Password authentication with opaque error messages | ✅ Done |
+| VTE terminal decoder (anti-obfuscation) | ✅ Done |
+| Command filter engine (Aho-Corasick) | ✅ Done |
+| PTY-aware shell session filtering | ✅ Done |
+| Session recording — asciinema v2 `.cast` format | 🔧 In progress |
+| Live session streaming over WebSocket | 📅 Planned |
+| Local LLM intent analysis (Ollama + Mistral 7B) | 📅 Planned |
+| JIT SSH certificates via HashiCorp Vault | 📅 Planned |
+| GeoIP impossible travel detection | 📅 Planned |
+| Admin session takeover & keyboard lock | 📅 Planned |
+| eBPF kernel-level syscall monitoring | 📅 Planned |
+| Prometheus metrics + Grafana dashboard | 📅 Planned |
+| React web panel with live session replay | 📅 Planned |
 
 ---
 
@@ -90,14 +92,13 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 │   ├── heart/
 │   │   ├── bridge.go                # Bidirectional stream multiplexer
 │   │   └── terminal.go              # PTY and window-change propagation
-│   ├── forwarding/                  # Port forwarding (planned)
 │   ├── audit/
 │   │   ├── recorder.go              # asciinema v2 .cast session recording
 │   │   └── streamer.go              # Live WebSocket streaming (planned)
 │   ├── security/
 │   │   ├── filter/
 │   │   │   ├── engine.go            # Command filter — Aho-Corasick
-│   │   │   └── interceptor.go       # Bridge stdin interceptor
+│   │   │   └── interceptor.go       # Bridge stdin interceptor (exec + PTY modes)
 │   │   ├── emulation/
 │   │   │   ├── vte.go               # VTE state machine — tokens, Apply, HasObfuscation
 │   │   │   ├── decoder.go           # VTEDecoder, DecoderPipeline, DecodeResult
@@ -118,8 +119,6 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 │   │   └── vault.go                 # HashiCorp Vault client
 │   ├── observability/
 │   │   └── metrics.go               # Prometheus metrics
-│   ├── api_impl/
-│   │   └── service.go               # gRPC service implementation
 │   ├── models/
 │   │   └── interfaces.go            # Core interfaces (Recorder, Filter, ...)
 │   └── store/
@@ -130,11 +129,10 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 │   └── ptyutil/
 │       └── ansi.go                  # PTY / ANSI helpers
 ├── api/                             # gRPC proto definitions (Bastion <-> Agent)
-├── backlog/                         # Sprint tickets and roadmap
+├── backlog                          # Sprint tickets and roadmap
 ├── tests/
 │   ├── e2e_login_test.go            # End-to-end: client → bastion → target
 │   └── e2e_filter_test.go           # End-to-end: blocked command flow
-├── web/ui/                          # React admin panel (planned)
 ├── Dockerfile
 ├── config.yaml
 ├── go.mod
@@ -143,58 +141,32 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 
 ---
 
-## Getting Started
-
-### Prerequisites
-
-- Go 1.22+
-- An SSH host key for the bastion server identity
-
-```bash
-ssh-keygen -t ed25519 -f ./certs/truthsayer_host_key -N ""
-```
-
-### Build & Run
-
-```bash
-git clone https://github.com/yourusername/truthsayer
-cd truthsayer
-
-go build ./cmd/truthsayer
-./truthsayer --config config.yaml
-```
-
-### Configuration
-
-Copy the example config and adjust to your environment:
-
-```bash
-cp internal/config/config.yaml.example config.yaml
-```
+## Configuration
 
 ```yaml
 server:
   port: 2222
   host: "0.0.0.0"
-  host_key_path: "./certs/truthsayer_host_key"
+  host_key_path: "./certs/bastion_key"
 
 target:
-  default_addr: "192.168.1.100:22"
-  default_user: "admin"
+  default_addr: "127.0.0.1:22"
+  default_user: "dev-user"
 
 auth:
   users:
-    alice: "password123"   # plaintext for dev — hash for production
+    alice: "password123"   # plaintext for dev — bcrypt in Phase 4
 
 limits:
   max_connections: 100
   max_channels_per_conn: 10
 
 security:
-  session_timeout: 3600
   blacklist:
-    - "rm -rf /"
+    - "rm -rf"
     - "mkfs"
+  session_timeout: 3600
+  on_block: "message"      # "message" or "disconnect"
 
 audit:
   storage_path: "./logs/sessions"
@@ -213,48 +185,6 @@ audit:
 | `AUDIT_STORAGE` | Override session recording path |
 | `LOG_LEVEL` | Override log level |
 
-### Connect
-
-```bash
-ssh -p 2222 youruser@bastion-host
-```
-
----
-
-## Development
-
-### Setup
-
-After cloning, enable Git hooks:
-
-```bash
-git config core.hooksPath .githooks
-go install honnef.co/go/tools/cmd/staticcheck@latest
-```
-
-The pre-commit hook runs `gofmt`, `go vet`, `staticcheck`, and `go test -race` before every commit.
-
-### Running Tests
-
-```bash
-# All packages with race detector
-go test -race ./...
-
-# Specific package
-go test -race ./internal/proxy/...
-
-# With verbose output
-go test -race -v ./internal/audit/...
-```
-
-### Testing Philosophy
-
-Every public interface is tested in isolation using in-memory transports:
-
-- `net.Listener` on `127.0.0.1:0` — real TCP on a random port, avoids `net.Pipe()` deadlocks
-- `io.Pipe()` / `bytes.Buffer` — verifies data flow through the bridge without SSH overhead
-- `testcontainers-go` — integration tests against real PostgreSQL (planned)
-
 ---
 
 ## Security
@@ -262,6 +192,8 @@ Every public interface is tested in isolation using in-memory transports:
 Truthsayer is itself a security-critical component. A few design decisions worth noting:
 
 - **Passwords are never logged.** The `PasswordCallback` captures credentials only to verify identity. Error messages are identical for wrong password and unknown user to prevent enumeration attacks.
+- **PTY-aware filtering.** Commands in interactive shell sessions are inspected after the user presses Enter — without buffering keystrokes, so echo and line editing work normally.
+- **Obfuscation-resistant.** The VTE terminal emulator decodes ANSI escape sequences before inspection, so `rm\033[A -rf /` is caught the same as `rm -rf /`.
 - **Session data stays local.** The AI analysis runs entirely via a local Ollama instance. No command data is sent to any external API.
 - **Host key verification** is planned via HashiCorp Vault PKI. Until then, builds are not suitable for production use.
 
@@ -280,18 +212,28 @@ Apache License 2.0 — see [LICENSE](./LICENSE) for details.
 🚧 **Early development — not production ready.**
 
 ### Phase 1 — Core Proxy ✅ Complete
-TBAS-001 · TBAS-002 · TBAS-003 · TBAS-004 — Auth, config, bridge, E2E login tests passing.
+TBAS-001 ✅ Wire Authenticator into SSHServer  
+TBAS-002 ✅ Auth users section in config  
+TBAS-004 ✅ E2E login tests  
 
 ### Phase 2 — Terminal Emulation ✅ Complete
-TBAS-101 ✅ VTE decoder with token-based obfuscation detection
-TBAS-102 ✅ VTEDecoder, DecoderPipeline, DecoderFactory
-TBAS-103 ✅ DCS decoder for tmux/screen
-TBAS-104 ✅ Fuzz tests for VTE and DCS decoders
+TBAS-101 ✅ VTE decoder with token-based obfuscation detection  
+TBAS-102 ✅ VTEDecoder, DecoderPipeline, DecoderFactory  
+TBAS-103 ✅ DCS decoder for tmux/screen  
+TBAS-104 ✅ Fuzz tests for VTE and DCS decoders  
 
-### Phase 3 — Security Filter Engine 🔧 In progress
-TBAS-201 — Filter engine (Aho-Corasick)
-TBAS-202 · TBAS-203 — Filter in bridge, E2E filter test.
+### Phase 3 — Security Filter Engine ✅ Complete
+TBAS-201 ✅ Filter engine (Aho-Corasick)  
+TBAS-202 ✅ Filter in bridge  
+TBAS-203 ✅ E2E filter tests with execution counter  
+TBAS-801 ✅ PTY-aware command filtering for interactive shell sessions  
 
-### Phase 4+ — AI, eBPF, Identity 📅 Planned
+### Phase 4 — Audit & Session Recording 🔧 In progress
+TBAS-003 — Recorder in bridge (asciinema v2)  
+TBAS-301 — Session ID generation  
+TBAS-302 — Live session streaming over WebSocket  
+TBAS-303 — Session metadata in PostgreSQL  
+
+### Phase 5+ — AI, eBPF, Identity 📅 Planned
 
 The project is being built in the open. Contributions, feedback, and stars are welcome.
