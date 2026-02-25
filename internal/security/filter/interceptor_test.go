@@ -107,3 +107,84 @@ func TestFilterWriter_ObfuscatedCommand_IsBlocked(t *testing.T) {
 	assert.Empty(t, target.String())
 	assert.Contains(t, client.String(), "command blocked by policy")
 }
+
+func newPTYTestWriter(patterns []string, action BlockAction) (*FilterWriter, *bytes.Buffer, *bytes.Buffer) {
+	target := &bytes.Buffer{}
+	client := &bytes.Buffer{}
+	decoder := emulation.NewVTEDecoder()
+	engine := NewFilterEngine(patterns)
+	fw := NewPTYFilterWriter(target, client, decoder, engine, action)
+	return fw, target, client
+}
+
+// =============================================================================
+// PTY mode — passthrough behaviour
+// =============================================================================
+
+func TestPTYFilterWriter_AllowedCommand_BytesReachTargetImmediately(t *testing.T) {
+	fw, target, _ := newPTYTestWriter([]string{"mkfs"}, BlockActionMessage)
+	fw.Write([]byte("ls"))
+	// bytes must reach target before Enter
+	assert.Equal(t, "ls", target.String())
+}
+
+func TestPTYFilterWriter_AllowedCommand_EnterForwarded(t *testing.T) {
+	fw, target, _ := newPTYTestWriter([]string{"mkfs"}, BlockActionMessage)
+	fw.Write([]byte("ls\r"))
+	assert.Equal(t, "ls\r", target.String())
+}
+
+func TestPTYFilterWriter_BlockedCommand_EnterDropped(t *testing.T) {
+	fw, target, _ := newPTYTestWriter([]string{"mkfs"}, BlockActionMessage)
+	fw.Write([]byte("mkfs\r"))
+	// "mkfs" bytes reached target (passthrough), but Enter must be dropped
+	assert.Equal(t, "mkfs", target.String())
+}
+
+func TestPTYFilterWriter_BlockedCommand_ClientReceivesMessage(t *testing.T) {
+	fw, _, client := newPTYTestWriter([]string{"mkfs"}, BlockActionMessage)
+	fw.Write([]byte("mkfs\r"))
+	assert.Contains(t, client.String(), "command blocked by policy")
+}
+
+func TestPTYFilterWriter_Backspace_UpdatesShadowBuffer(t *testing.T) {
+	fw, target, client := newPTYTestWriter([]string{"mkfs"}, BlockActionMessage)
+	// type "mkfs", backspace twice → shadow = "mk", then type "ls" → "mkls"
+	// "mkls" is not blacklisted — Enter should be forwarded
+	fw.Write([]byte("mkfs\x7f\x7fls\r"))
+	assert.NotContains(t, client.String(), "command blocked by policy")
+	assert.Contains(t, target.String(), "\r")
+}
+
+func TestPTYFilterWriter_CtrlC_ResetsShadowBuffer(t *testing.T) {
+	fw, target, client := newPTYTestWriter([]string{"mkfs"}, BlockActionMessage)
+	// type "mkfs", ctrl+c resets shadow buffer, then "ls" + Enter
+	fw.Write([]byte("mkfs\x03ls\r"))
+	assert.NotContains(t, client.String(), "command blocked by policy")
+	assert.Contains(t, target.String(), "\r")
+}
+
+// =============================================================================
+// PTY mode — obfuscated mkfs variants
+// =============================================================================
+
+func TestPTYFilterWriter_Obfuscated_CursorUp(t *testing.T) {
+	fw, _, client := newPTYTestWriter([]string{"mkfs"}, BlockActionMessage)
+	// "mk" + CursorUp ESC sequence + "fs" → VTE decodes to "mkfs"
+	fw.Write(append([]byte("mk\033[Afs"), '\r'))
+	assert.Contains(t, client.String(), "command blocked by policy")
+
+}
+
+func TestPTYFilterWriter_Obfuscated_Backspace(t *testing.T) {
+	fw, _, client := newPTYTestWriter([]string{"mkfs"}, BlockActionMessage)
+	// "mkXfs" + backspace over X → shadow = "mkfs"
+	fw.Write([]byte("mkXfs\x7f\x7f\x7ffs\r"))
+	assert.Contains(t, client.String(), "command blocked by policy")
+}
+
+func TestPTYFilterWriter_Obfuscated_Uppercase(t *testing.T) {
+	fw, _, client := newPTYTestWriter([]string{"mkfs"}, BlockActionMessage)
+	fw.Write([]byte("MKFS\r"))
+	assert.Contains(t, client.String(), "command blocked by policy")
+}
