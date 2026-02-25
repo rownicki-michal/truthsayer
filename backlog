@@ -463,6 +463,36 @@ Acceptance criteria:
 
 Files: Makefile
 
+================================================================================
+  EPIC: TBAS-800 — Shell Session Filtering
+================================================================================
+
+TBAS-801 | Implement PTY-aware filter for interactive shell sessions
+Type: Task | Priority: Medium | Component: security/filter, heart
+─────────────────────────────────────────────────────────────────────────────
+FilterWriter buffers bytes until \r or \n before inspecting — this breaks
+interactive shell sessions where each keystroke must reach the target
+immediately for echo and line editing to work correctly.
+
+Currently filter is disabled for shell sessions (only exec is filtered).
+To filter shell sessions properly, the bastion needs a PTY state machine
+that tracks the current command line as the user types, without buffering
+the raw byte stream.
+
+Acceptance criteria:
+  - Interactive shell session: each keystroke reaches target immediately (no buffering)
+  - Bastion maintains a shadow command buffer updated on each keystroke
+  - On Enter: shadow buffer is inspected by FilterEngine before flushing
+  - Blocked command: client receives block message, Enter is dropped
+  - Obfuscated commands (ANSI sequences) decoded via VTE before inspection
+  - Backspace, cursor movement, ctrl+c handled correctly in shadow buffer
+  - go test -race ./tests/... passes including shell session filter tests
+
+Files: internal/security/filter/pty_filter.go,
+       internal/heart/bridge.go,
+       internal/proxy/server.go
+Dependency: TBAS-201, TBAS-101
+
 
 ================================================================================
   DEPENDENCY GRAPH (critical path)

@@ -115,4 +115,5 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("security.on_block", "message")
 	v.SetDefault("audit.storage_path", "./logs/sessions")
 	v.SetDefault("audit.log_level", "info")
+	v.SetDefault("auth.users", map[string]string{})
 }

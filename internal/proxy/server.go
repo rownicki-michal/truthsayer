@@ -269,6 +269,14 @@ func (s *SSHServer) newFilterWriter(targetStdin io.WriteCloser, clientChan ssh.C
 	return filter.NewFilterWriter(targetStdin, clientChan, decoder, s.filterEngine, s.blockAction)
 }
 
+func (s *SSHServer) newPTYFilterWriter(targetStdin io.WriteCloser, clientChan ssh.Channel, term string) *filter.FilterWriter {
+	if term == "" {
+		term = "xterm"
+	}
+	decoder := emulation.NewDecoderFactory().FromTerm(term)
+	return filter.NewPTYFilterWriter(targetStdin, clientChan, decoder, s.filterEngine, s.blockAction)
+}
+
 // handleSession negotiates PTY/shell/exec requests and runs the bridge.
 func (s *SSHServer) handleSession(
 	conn *ssh.ServerConn,
@@ -348,7 +356,7 @@ func (s *SSHServer) handleSession(
 			}
 
 			bridge := heart.NewBridge(clientChan, targetStdin, targetStdout, targetStderr)
-			bridge.WithFilter(s.newFilterWriter(targetStdin, clientChan, ptyReq.Term))
+			bridge.WithFilter(s.newPTYFilterWriter(targetStdin, clientChan, ptyReq.Term))
 			bridge.Run()
 
 			if err := targetSession.Wait(); err != nil {
