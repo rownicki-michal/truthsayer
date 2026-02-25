@@ -259,16 +259,6 @@ func (s *SSHServer) handleConnection(nConn net.Conn) {
 	}
 }
 
-// newFilterWriter creates a FilterWriter for the session using the term type
-// from pty-req. Falls back to "xterm" when term is empty (exec without PTY).
-func (s *SSHServer) newFilterWriter(targetStdin io.WriteCloser, clientChan ssh.Channel, term string) *filter.FilterWriter {
-	if term == "" {
-		term = "xterm"
-	}
-	decoder := emulation.NewDecoderFactory().FromTerm(term)
-	return filter.NewFilterWriter(targetStdin, clientChan, decoder, s.filterEngine, s.blockAction)
-}
-
 func (s *SSHServer) newPTYFilterWriter(targetStdin io.WriteCloser, clientChan ssh.Channel, term string) *filter.FilterWriter {
 	if term == "" {
 		term = "xterm"
