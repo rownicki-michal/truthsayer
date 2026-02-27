@@ -23,6 +23,7 @@ type Bridge struct {
 	// When nil, bytes are copied directly to targetStdin (no filtering).
 	filter   io.Writer
 	recorder io.Writer
+	streamer io.Writer
 }
 
 // NewBridge creates a new Bridge instance.
@@ -54,15 +55,27 @@ func (b *Bridge) WithFilter(fw io.Writer) {
 	b.filter = fw
 }
 
+// WithRecorder attaches a Recorder to the bridge. stdout and stderr frames
+// are tee'd to the recorder for asciinema v2 session recording.
+//
+// Call before Run().
 func (b *Bridge) WithRecorder(r io.Writer) {
 	b.recorder = r
+}
+
+// WithStreamer attaches a Streamer to the bridge. stdout and stderr frames
+// are tee'd to the streamer for live observer fan-out.
+//
+// Call before Run().
+func (b *Bridge) WithStreamer(s io.Writer) {
+	b.streamer = s
 }
 
 // Run starts the bridge and blocks until all streams are done.
 //
 // Three goroutines run concurrently:
-//   - target stdout → client
-//   - target stderr → client
+//   - target stdout → client (+ recorder, + streamer if set)
+//   - target stderr → client (+ recorder, + streamer if set)
 //   - client stdin  → filter (if set) or targetStdin
 //
 // The stdin goroutine drains all client input but is also unblocked
@@ -77,20 +90,15 @@ func (b *Bridge) Run() {
 	var outputWg sync.WaitGroup
 	outputWg.Add(2)
 
-	// Target stdout → client (tee'd to recorder if set)
+	// Target stdout → client (tee'd to recorder and streamer if set).
 	go func() {
 		defer wg.Done()
 		defer outputWg.Done()
-
-		dst := io.Writer(b.client)
-		if b.recorder != nil {
-			dst = io.MultiWriter(b.client, b.recorder)
-		}
-		io.Copy(dst, b.targetStdout)
+		io.Copy(b.outputDst(b.client), b.targetStdout)
 	}()
 
 	// Target stderr → client.Stderr() if ssh.Channel, otherwise client.
-	// Also tee'd to recorder if set.
+	// Also tee'd to recorder and streamer if set.
 	go func() {
 		defer wg.Done()
 		defer outputWg.Done()
@@ -101,12 +109,7 @@ func (b *Bridge) Run() {
 		} else {
 			clientDst = b.client
 		}
-
-		dst := clientDst
-		if b.recorder != nil {
-			dst = io.MultiWriter(clientDst, b.recorder)
-		}
-		io.Copy(dst, b.targetStderr)
+		io.Copy(b.outputDst(clientDst), b.targetStderr)
 	}()
 
 	// Signal outputDone when both output streams finish.
@@ -140,6 +143,22 @@ func (b *Bridge) Run() {
 	}()
 
 	wg.Wait()
+}
+
+// outputDst builds the destination writer for an output stream (stdout/stderr).
+// client is always included; recorder and streamer are added when set.
+func (b *Bridge) outputDst(client io.Writer) io.Writer {
+	writers := []io.Writer{client}
+	if b.recorder != nil {
+		writers = append(writers, b.recorder)
+	}
+	if b.streamer != nil {
+		writers = append(writers, b.streamer)
+	}
+	if len(writers) == 1 {
+		return writers[0]
+	}
+	return io.MultiWriter(writers...)
 }
 
 // stdinDst returns the destination writer for client stdin.

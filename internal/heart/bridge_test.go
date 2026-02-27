@@ -538,3 +538,122 @@ func TestRun_NilRecorderBehavesIdentically(t *testing.T) {
 	assert.Contains(t, output, "server-stdout")
 	assert.Contains(t, output, "server-stderr")
 }
+
+// =============================================================================
+// Run — streamer tee (WithStreamer)
+// =============================================================================
+
+func TestRun_StreamerReceivesStdout(t *testing.T) {
+	b, _, _ := newBridgeFixture("", "stdout-data", "")
+
+	streamer := &safeBuffer{}
+	b.WithStreamer(streamer)
+	b.Run()
+
+	assert.Equal(t, "stdout-data", streamer.String(),
+		"streamer should receive stdout")
+}
+
+func TestRun_StreamerReceivesStderr(t *testing.T) {
+	b, _, _ := newBridgeFixture("", "", "stderr-data")
+
+	streamer := &safeBuffer{}
+	b.WithStreamer(streamer)
+	b.Run()
+
+	assert.Equal(t, "stderr-data", streamer.String(),
+		"streamer should receive stderr")
+}
+
+func TestRun_StreamerReceivesBothStdoutAndStderr(t *testing.T) {
+	b, _, _ := newBridgeFixture("", "stdout-data", "stderr-data")
+
+	streamer := &safeBuffer{}
+	b.WithStreamer(streamer)
+	b.Run()
+
+	streamed := streamer.String()
+	assert.Contains(t, streamed, "stdout-data",
+		"streamer should contain stdout")
+	assert.Contains(t, streamed, "stderr-data",
+		"streamer should contain stderr")
+}
+
+func TestRun_StreamerDoesNotAffectClientOutput(t *testing.T) {
+	// Streamer is tee'd — client must still receive all data.
+	b, _, clientOutput := newBridgeFixture("", "stdout-data", "stderr-data")
+
+	streamer := &safeBuffer{}
+	b.WithStreamer(streamer)
+	b.Run()
+
+	output := clientOutput.String()
+	assert.Contains(t, output, "stdout-data",
+		"client should still receive stdout when streamer is attached")
+	assert.Contains(t, output, "stderr-data",
+		"client should still receive stderr when streamer is attached")
+}
+
+func TestRun_StreamerReceivesStderrViaSSHChannel(t *testing.T) {
+	// When client is ssh.Channel, stderr goes to ch.Stderr() —
+	// streamer must still receive it.
+	stderrBuf := &bytes.Buffer{}
+	clientBuf := &bytes.Buffer{}
+
+	ch := &mockSSHChannel{
+		ReadWriter: &pipeReadWriter{
+			src: &bytes.Buffer{},
+			dst: clientBuf,
+		},
+		stderrBuf: stderrBuf,
+	}
+
+	stdin := newWriteCloser()
+	stdout := strings.NewReader("")
+	stderr := strings.NewReader("stderr-via-channel")
+
+	b := NewBridge(ch, stdin, stdout, stderr)
+
+	streamer := &safeBuffer{}
+	b.WithStreamer(streamer)
+	b.Run()
+
+	assert.Equal(t, "stderr-via-channel", stderrBuf.String(),
+		"stderr should still reach ch.Stderr()")
+	assert.Contains(t, streamer.String(), "stderr-via-channel",
+		"streamer should receive stderr even when client is ssh.Channel")
+}
+
+func TestRun_RecorderAndStreamerBothReceiveData(t *testing.T) {
+	// Both recorder and streamer attached — both must receive identical data.
+	b, _, clientOutput := newBridgeFixture("", "stdout-data", "stderr-data")
+
+	recorder := &safeBuffer{}
+	streamer := &safeBuffer{}
+	b.WithRecorder(recorder)
+	b.WithStreamer(streamer)
+	b.Run()
+
+	assert.Contains(t, recorder.String(), "stdout-data")
+	assert.Contains(t, recorder.String(), "stderr-data")
+	assert.Contains(t, streamer.String(), "stdout-data")
+	assert.Contains(t, streamer.String(), "stderr-data")
+	assert.Contains(t, clientOutput.String(), "stdout-data")
+	assert.Contains(t, clientOutput.String(), "stderr-data")
+}
+
+func TestRun_NilStreamerBehavesIdentically(t *testing.T) {
+	// WithStreamer never called — bridge must behave exactly as before.
+	b, targetStdin, clientOutput := newBridgeFixture(
+		"client-input",
+		"server-stdout",
+		"server-stderr",
+	)
+
+	b.Run()
+
+	assert.Equal(t, "client-input", string(targetStdin.Bytes()))
+	output := clientOutput.String()
+	assert.Contains(t, output, "server-stdout")
+	assert.Contains(t, output, "server-stderr")
+}
