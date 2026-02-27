@@ -45,7 +45,7 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 | VTE terminal decoder (anti-obfuscation) | ✅ Done |
 | Command filter engine (Aho-Corasick) | ✅ Done |
 | PTY-aware shell session filtering | ✅ Done |
-| Session recording — asciinema v2 `.cast` format | 🔧 In progress |
+| Session recording — asciinema v2 `.cast` format | ✅ Done |
 | Live session streaming over WebSocket | 📅 Planned |
 | Local LLM intent analysis (Ollama + Mistral 7B) | 📅 Planned |
 | JIT SSH certificates via HashiCorp Vault | 📅 Planned |
@@ -229,7 +229,7 @@ TBAS-203 ✅ E2E filter tests with execution counter
 TBAS-801 ✅ PTY-aware command filtering for interactive shell sessions  
 
 ### Phase 4 — Audit & Session Recording 🔧 In progress
-TBAS-003 — Recorder in bridge (asciinema v2)  
+TBAS-003 ✅ Recorder in bridge (asciinema v2)
 TBAS-301 — Session ID generation  
 TBAS-302 — Live session streaming over WebSocket  
 TBAS-303 — Session metadata in PostgreSQL  
