@@ -140,7 +140,7 @@ func startBastionWithFilter(t *testing.T, targetAddr, targetUser, targetPass str
 		OnBlock:   "message",
 	}
 
-	srv, err := proxy.NewSSHServer("127.0.0.1:0", generateSigner(t), auth, target, limits, security)
+	srv, err := proxy.NewSSHServer("127.0.0.1:0", generateSigner(t), auth, target, limits, security, config.Audit{})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
