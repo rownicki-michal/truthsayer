@@ -21,7 +21,8 @@ type Bridge struct {
 
 	// filter intercepts client stdin before it reaches targetStdin.
 	// When nil, bytes are copied directly to targetStdin (no filtering).
-	filter io.Writer
+	filter   io.Writer
+	recorder io.Writer
 }
 
 // NewBridge creates a new Bridge instance.
@@ -53,6 +54,10 @@ func (b *Bridge) WithFilter(fw io.Writer) {
 	b.filter = fw
 }
 
+func (b *Bridge) WithRecorder(r io.Writer) {
+	b.recorder = r
+}
+
 // Run starts the bridge and blocks until all streams are done.
 //
 // Three goroutines run concurrently:
@@ -76,18 +81,30 @@ func (b *Bridge) Run() {
 	go func() {
 		defer wg.Done()
 		defer outputWg.Done()
-		io.Copy(b.client, b.targetStdout)
+
+		dst := io.Writer(b.client)
+
+		if b.recorder != nil {
+			dst = io.MultiWriter(b.client, b.recorder)
+		}
+		io.Copy(dst, b.targetStdout)
 	}()
 
 	// Target stderr → client (or client.Stderr() when ssh.Channel)
 	go func() {
 		defer wg.Done()
 		defer outputWg.Done()
+		var clientDst io.Writer
 		if ch, ok := b.client.(ssh.Channel); ok {
 			io.Copy(ch.Stderr(), b.targetStderr)
 		} else {
 			io.Copy(b.client, b.targetStderr)
 		}
+		dst := clientDst
+		if b.recorder != nil {
+			dst = io.MultiWriter(clientDst, b.recorder)
+		}
+		io.Copy(dst, b.targetStderr)
 	}()
 
 	// Signal outputDone when both output streams finish.

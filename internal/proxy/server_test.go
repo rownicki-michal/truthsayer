@@ -37,7 +37,7 @@ func minimalAuth() AuthConfig {
 func newTestServer(t *testing.T, auth AuthConfig, target TargetConfig, limits LimitsConfig) *SSHServer {
 	t.Helper()
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("127.0.0.1:0", hostKey, auth, target, limits, config.Security{})
+	s, err := NewSSHServer("127.0.0.1:0", hostKey, auth, target, limits, config.Security{}, config.Audit{})
 	require.NoError(t, err)
 	return s
 }
@@ -46,7 +46,7 @@ func startServer(t *testing.T, auth AuthConfig, limits LimitsConfig) string {
 	t.Helper()
 
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("127.0.0.1:0", hostKey, auth, TargetConfig{}, limits, config.Security{})
+	s, err := NewSSHServer("127.0.0.1:0", hostKey, auth, TargetConfig{}, limits, config.Security{}, config.Audit{})
 	require.NoError(t, err)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -188,7 +188,7 @@ func TestNewSSHServer_ServerVersionSet(t *testing.T) {
 
 func TestNewSSHServer_InvalidAddrDoesNotFail(t *testing.T) {
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("256.256.256.256:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{}, config.Security{})
+	s, err := NewSSHServer("256.256.256.256:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{}, config.Security{}, config.Audit{})
 	assert.NoError(t, err)
 	assert.NotNil(t, s)
 }
@@ -364,7 +364,7 @@ func TestSemaphore_ConcurrentAcquire(t *testing.T) {
 
 func TestStart_ShutdownOnContextCancel(t *testing.T) {
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("127.0.0.1:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{}, config.Security{})
+	s, err := NewSSHServer("127.0.0.1:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{}, config.Security{}, config.Audit{})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -389,7 +389,7 @@ func TestStart_ShutdownOnContextCancel(t *testing.T) {
 
 func TestStart_FailsOnInvalidAddr(t *testing.T) {
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer("256.256.256.256:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{}, config.Security{})
+	s, err := NewSSHServer("256.256.256.256:0", hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{}, config.Security{}, config.Audit{})
 	require.NoError(t, err)
 	assert.Error(t, s.Start(context.Background()))
 }
@@ -400,7 +400,7 @@ func TestStart_FailsOnOccupiedPort(t *testing.T) {
 	t.Cleanup(func() { blocker.Close() })
 
 	hostKey := generateHostKey(t)
-	s, err := NewSSHServer(blocker.Addr().String(), hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{}, config.Security{})
+	s, err := NewSSHServer(blocker.Addr().String(), hostKey, minimalAuth(), TargetConfig{}, LimitsConfig{}, config.Security{}, config.Audit{})
 	require.NoError(t, err)
 	assert.Error(t, s.Start(context.Background()))
 }

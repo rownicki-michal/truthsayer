@@ -46,7 +46,7 @@ func main() {
 	}
 
 	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	srv, err := proxy.NewSSHServer(addr, hostKey, auth, target, limits, cfg.Security)
+	srv, err := proxy.NewSSHServer(addr, hostKey, auth, target, limits, cfg.Security, cfg.Audit)
 	if err != nil {
 		log.Fatalf("[BOOT] Failed to create server: %v", err)
 	}

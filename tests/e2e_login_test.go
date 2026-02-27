@@ -152,7 +152,7 @@ func startBastion(t *testing.T, targetAddr, targetUser, targetPass string) strin
 	limits := proxy.LimitsConfig{}
 	security := config.Security{} // empty blacklist — no commands blocked in login tests
 
-	srv, err := proxy.NewSSHServer("127.0.0.1:0", generateSigner(t), auth, target, limits, security)
+	srv, err := proxy.NewSSHServer("127.0.0.1:0", generateSigner(t), auth, target, limits, security, config.Audit{})
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

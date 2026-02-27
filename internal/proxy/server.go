@@ -2,6 +2,8 @@ package proxy
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -10,15 +12,23 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
+	"truthsayer/internal/audit"
 	"truthsayer/internal/config"
 	"truthsayer/internal/heart"
 	"truthsayer/internal/security/emulation"
 	"truthsayer/internal/security/filter"
 )
+
+func generateSessionID(user string) string {
+	b := make([]byte, 4)
+	rand.Read(b)
+	return fmt.Sprintf("%d-%s-%s", time.Now().Unix(), user, hex.EncodeToString(b))
+}
 
 // LimitsConfig holds configurable resource limits for the server.
 type LimitsConfig struct {
@@ -41,6 +51,8 @@ type SSHServer struct {
 	// filter fields — initialised from config.Security
 	filterEngine *filter.FilterEngine
 	blockAction  filter.BlockAction
+
+	auditStoragePath string
 }
 
 // ptyRequest holds the PTY parameters sent by the client.
@@ -69,6 +81,7 @@ func NewSSHServer(
 	target TargetConfig,
 	limits LimitsConfig,
 	security config.Security,
+	audit config.Audit,
 ) (*SSHServer, error) {
 	authenticator, err := NewAuthenticator(auth)
 	if err != nil {
@@ -81,13 +94,14 @@ func NewSSHServer(
 	}
 
 	s := &SSHServer{
-		addr:         addr,
-		hostKey:      hostKey,
-		target:       target,
-		limits:       limits,
-		ready:        make(chan struct{}),
-		filterEngine: filter.NewFilterEngine(security.Blacklist),
-		blockAction:  blockAction,
+		addr:             addr,
+		hostKey:          hostKey,
+		target:           target,
+		limits:           limits,
+		ready:            make(chan struct{}),
+		filterEngine:     filter.NewFilterEngine(security.Blacklist),
+		blockAction:      blockAction,
+		auditStoragePath: audit.StoragePath,
 	}
 
 	if limits.MaxConnections > 0 {
@@ -345,6 +359,17 @@ func (s *SSHServer) handleSession(
 				return
 			}
 
+			sessionID := generateSessionID(conn.User())
+			recorder, recErr := audit.NewRecorder(s.auditStoragePath, sessionID, int(ptyReq.Width), int(ptyReq.Height))
+			if recErr != nil {
+				log.Printf("[SESSION] Failed to create recorder: %v — continuing without recording", recErr)
+				recorder = nil
+			}
+			if recorder != nil {
+				defer recorder.Close()
+				log.Printf("[SESSION] Recording to %s", recorder.Path())
+			}
+
 			bridge := heart.NewBridge(clientChan, targetStdin, targetStdout, targetStderr)
 			bridge.WithFilter(s.newPTYFilterWriter(targetStdin, clientChan, ptyReq.Term))
 			bridge.Run()
@@ -379,7 +404,25 @@ func (s *SSHServer) handleSession(
 				return
 			}
 
+			sessionID := generateSessionID(conn.User())
+
+			const (
+				defaultExecWidth  = 220
+				defaultExecHeight = 50
+			)
+			recorder, recErr := audit.NewRecorder(s.auditStoragePath, sessionID, defaultExecWidth, defaultExecHeight)
+			if recErr != nil {
+				log.Printf("[SESSION] Failed to create recorder: %v — continuing without recording", recErr)
+				recorder = nil
+			}
+			if recorder != nil {
+				log.Printf("[SESSION] Recording to %s", recorder.Path())
+			}
+
 			bridge := heart.NewBridge(clientChan, targetStdin, targetStdout, targetStderr)
+			if recorder != nil {
+				bridge.WithRecorder(recorder)
+			}
 
 			waitErr := make(chan error, 1)
 			go func() {
@@ -387,6 +430,9 @@ func (s *SSHServer) handleSession(
 			}()
 
 			bridge.Run()
+			if recorder != nil {
+				recorder.Close()
+			}
 
 			exitCode := 0
 			if err := <-waitErr; err != nil {
