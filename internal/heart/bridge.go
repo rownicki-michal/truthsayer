@@ -77,29 +77,31 @@ func (b *Bridge) Run() {
 	var outputWg sync.WaitGroup
 	outputWg.Add(2)
 
-	// Target stdout → client
+	// Target stdout → client (tee'd to recorder if set)
 	go func() {
 		defer wg.Done()
 		defer outputWg.Done()
 
 		dst := io.Writer(b.client)
-
 		if b.recorder != nil {
 			dst = io.MultiWriter(b.client, b.recorder)
 		}
 		io.Copy(dst, b.targetStdout)
 	}()
 
-	// Target stderr → client (or client.Stderr() when ssh.Channel)
+	// Target stderr → client.Stderr() if ssh.Channel, otherwise client.
+	// Also tee'd to recorder if set.
 	go func() {
 		defer wg.Done()
 		defer outputWg.Done()
+
 		var clientDst io.Writer
 		if ch, ok := b.client.(ssh.Channel); ok {
-			io.Copy(ch.Stderr(), b.targetStderr)
+			clientDst = ch.Stderr()
 		} else {
-			io.Copy(b.client, b.targetStderr)
+			clientDst = b.client
 		}
+
 		dst := clientDst
 		if b.recorder != nil {
 			dst = io.MultiWriter(clientDst, b.recorder)

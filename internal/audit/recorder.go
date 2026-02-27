@@ -3,11 +3,20 @@ package audit
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 )
+
+// RecorderIface is the common interface for Recorder and NopRecorder.
+// Bridge and server code depend on this interface — never on the concrete type.
+type RecorderIface interface {
+	io.Writer
+	Record(data []byte) error
+	Close() error
+}
 
 // header is the asciinema v2 .cast file header (first line, JSON).
 type header struct {
@@ -91,7 +100,6 @@ func (r *Recorder) Write(p []byte) (int, error) {
 
 // Record writes data as a stdout ("o") event with a relative timestamp.
 func (r *Recorder) Record(data []byte) error {
-
 	if len(data) == 0 {
 		return nil
 	}

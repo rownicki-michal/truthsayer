@@ -24,10 +24,12 @@ import (
 	"truthsayer/internal/security/filter"
 )
 
+// generateSessionID returns a collision-resistant session identifier.
+// Format: <YYYYMMDD>-<user>-<random8hex>  e.g. 20260223-alice-a1b2c3d4
 func generateSessionID(user string) string {
 	b := make([]byte, 4)
 	rand.Read(b)
-	return fmt.Sprintf("%d-%s-%s", time.Now().Unix(), user, hex.EncodeToString(b))
+	return fmt.Sprintf("%s-%s-%s", time.Now().Format("20060102"), user, hex.EncodeToString(b))
 }
 
 // LimitsConfig holds configurable resource limits for the server.
@@ -281,6 +283,18 @@ func (s *SSHServer) newPTYFilterWriter(targetStdin io.WriteCloser, clientChan ss
 	return filter.NewPTYFilterWriter(targetStdin, clientChan, decoder, s.filterEngine, s.blockAction)
 }
 
+// newRecorder creates a Recorder for the given session. On failure it logs the
+// error and returns a NopRecorder so the session continues without recording.
+func (s *SSHServer) newRecorder(sessionID string, width, height int) audit.RecorderIface {
+	r, err := audit.NewRecorder(s.auditStoragePath, sessionID, width, height)
+	if err != nil {
+		log.Printf("[SESSION] Failed to create recorder for %s: %v — continuing without recording", sessionID, err)
+		return &audit.NopRecorder{}
+	}
+	log.Printf("[SESSION] Recording session %s to %s", sessionID, r.Path())
+	return r
+}
+
 // handleSession negotiates PTY/shell/exec requests and runs the bridge.
 func (s *SSHServer) handleSession(
 	conn *ssh.ServerConn,
@@ -291,7 +305,8 @@ func (s *SSHServer) handleSession(
 	defer clientChan.Close()
 	defer targetSession.Close()
 
-	log.Printf("[SESSION] Opened for user: %s", conn.User())
+	sessionID := generateSessionID(conn.User())
+	log.Printf("[SESSION] Opened: id=%s user=%s", sessionID, conn.User())
 
 	targetStdin, err := targetSession.StdinPipe()
 	if err != nil {
@@ -359,24 +374,18 @@ func (s *SSHServer) handleSession(
 				return
 			}
 
-			sessionID := generateSessionID(conn.User())
-			recorder, recErr := audit.NewRecorder(s.auditStoragePath, sessionID, int(ptyReq.Width), int(ptyReq.Height))
-			if recErr != nil {
-				log.Printf("[SESSION] Failed to create recorder: %v — continuing without recording", recErr)
-				recorder = nil
-			}
-			if recorder != nil {
-				defer recorder.Close()
-				log.Printf("[SESSION] Recording to %s", recorder.Path())
-			}
+			recorder := s.newRecorder(sessionID, int(ptyReq.Width), int(ptyReq.Height))
+			defer recorder.Close()
 
 			bridge := heart.NewBridge(clientChan, targetStdin, targetStdout, targetStderr)
 			bridge.WithFilter(s.newPTYFilterWriter(targetStdin, clientChan, ptyReq.Term))
+			bridge.WithRecorder(recorder)
 			bridge.Run()
 
 			if err := targetSession.Wait(); err != nil {
 				log.Printf("[SESSION] Shell exited with error: %v", err)
 			}
+			log.Printf("[SESSION] Closed: id=%s", sessionID)
 			return
 
 		case "exec":
@@ -386,7 +395,7 @@ func (s *SSHServer) handleSession(
 				continue
 			}
 			req.Reply(true, nil)
-			log.Printf("[SESSION] exec: %q", execPayload.Command)
+			log.Printf("[SESSION] exec: id=%s cmd=%q", sessionID, execPayload.Command)
 
 			decoder := emulation.NewDecoderFactory().FromTerm(ptyReq.Term)
 			result := decoder.Decode([]byte(execPayload.Command))
@@ -403,26 +412,15 @@ func (s *SSHServer) handleSession(
 				log.Printf("[SESSION] Failed to exec %q: %v", execPayload.Command, err)
 				return
 			}
-
-			sessionID := generateSessionID(conn.User())
-
 			const (
 				defaultExecWidth  = 220
 				defaultExecHeight = 50
 			)
-			recorder, recErr := audit.NewRecorder(s.auditStoragePath, sessionID, defaultExecWidth, defaultExecHeight)
-			if recErr != nil {
-				log.Printf("[SESSION] Failed to create recorder: %v — continuing without recording", recErr)
-				recorder = nil
-			}
-			if recorder != nil {
-				log.Printf("[SESSION] Recording to %s", recorder.Path())
-			}
+			recorder := s.newRecorder(sessionID, defaultExecWidth, defaultExecHeight)
+			defer recorder.Close()
 
 			bridge := heart.NewBridge(clientChan, targetStdin, targetStdout, targetStderr)
-			if recorder != nil {
-				bridge.WithRecorder(recorder)
-			}
+			bridge.WithRecorder(recorder)
 
 			waitErr := make(chan error, 1)
 			go func() {
@@ -430,9 +428,6 @@ func (s *SSHServer) handleSession(
 			}()
 
 			bridge.Run()
-			if recorder != nil {
-				recorder.Close()
-			}
 
 			exitCode := 0
 			if err := <-waitErr; err != nil {
@@ -443,6 +438,7 @@ func (s *SSHServer) handleSession(
 			}
 			exitStatus := struct{ Status uint32 }{uint32(exitCode)}
 			clientChan.SendRequest("exit-status", false, ssh.Marshal(exitStatus))
+			log.Printf("[SESSION] Closed: id=%s", sessionID)
 			return
 
 		case "env":
