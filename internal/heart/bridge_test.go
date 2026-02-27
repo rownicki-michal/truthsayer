@@ -434,3 +434,107 @@ func TestRun_StderrGoesToChannelStderrWhenSSHChannel(t *testing.T) {
 	assert.Equal(t, "stdout-data", clientBuf.String(),
 		"stdout should go to the main client stream")
 }
+
+// =============================================================================
+// Run — recorder tee (WithRecorder)
+// =============================================================================
+
+func TestRun_RecorderReceivesStdout(t *testing.T) {
+	b, _, _ := newBridgeFixture("", "stdout-data", "")
+
+	recorder := &safeBuffer{}
+	b.WithRecorder(recorder)
+	b.Run()
+
+	assert.Equal(t, "stdout-data", recorder.String(),
+		"recorder should receive stdout")
+}
+
+func TestRun_RecorderReceivesStderr(t *testing.T) {
+	// This test would have caught the dead-code bug in the original bridge.go —
+	// stderr was never tee'd to the recorder because clientDst was nil
+	// before the fix.
+	b, _, _ := newBridgeFixture("", "", "stderr-data")
+
+	recorder := &safeBuffer{}
+	b.WithRecorder(recorder)
+	b.Run()
+
+	assert.Equal(t, "stderr-data", recorder.String(),
+		"recorder should receive stderr")
+}
+
+func TestRun_RecorderReceivesBothStdoutAndStderr(t *testing.T) {
+	b, _, _ := newBridgeFixture("", "stdout-data", "stderr-data")
+
+	recorder := &safeBuffer{}
+	b.WithRecorder(recorder)
+	b.Run()
+
+	recorded := recorder.String()
+	assert.Contains(t, recorded, "stdout-data",
+		"recorder should contain stdout")
+	assert.Contains(t, recorded, "stderr-data",
+		"recorder should contain stderr")
+}
+
+func TestRun_RecorderDoesNotAffectClientOutput(t *testing.T) {
+	// Recorder is tee'd — client must still receive all data.
+	b, _, clientOutput := newBridgeFixture("", "stdout-data", "stderr-data")
+
+	recorder := &safeBuffer{}
+	b.WithRecorder(recorder)
+	b.Run()
+
+	output := clientOutput.String()
+	assert.Contains(t, output, "stdout-data",
+		"client should still receive stdout when recorder is attached")
+	assert.Contains(t, output, "stderr-data",
+		"client should still receive stderr when recorder is attached")
+}
+
+func TestRun_RecorderReceivesStderrViaSSHChannel(t *testing.T) {
+	// When client is ssh.Channel, stderr goes to ch.Stderr() —
+	// recorder must still receive it.
+	stderrBuf := &bytes.Buffer{}
+	clientBuf := &bytes.Buffer{}
+
+	ch := &mockSSHChannel{
+		ReadWriter: &pipeReadWriter{
+			src: &bytes.Buffer{},
+			dst: clientBuf,
+		},
+		stderrBuf: stderrBuf,
+	}
+
+	stdin := newWriteCloser()
+	stdout := strings.NewReader("")
+	stderr := strings.NewReader("stderr-via-channel")
+
+	b := NewBridge(ch, stdin, stdout, stderr)
+
+	recorder := &safeBuffer{}
+	b.WithRecorder(recorder)
+	b.Run()
+
+	assert.Equal(t, "stderr-via-channel", stderrBuf.String(),
+		"stderr should still reach ch.Stderr()")
+	assert.Contains(t, recorder.String(), "stderr-via-channel",
+		"recorder should receive stderr even when client is ssh.Channel")
+}
+
+func TestRun_NilRecorderBehavesIdentically(t *testing.T) {
+	// WithRecorder never called — bridge must behave exactly as before.
+	b, targetStdin, clientOutput := newBridgeFixture(
+		"client-input",
+		"server-stdout",
+		"server-stderr",
+	)
+
+	b.Run()
+
+	assert.Equal(t, "client-input", string(targetStdin.Bytes()))
+	output := clientOutput.String()
+	assert.Contains(t, output, "server-stdout")
+	assert.Contains(t, output, "server-stderr")
+}
