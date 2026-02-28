@@ -2,6 +2,10 @@
 
 > An SSH bastion that doesn't just forward connections — it understands them.
 
+> **Note:** This project is an experiment in evaluating the capabilities of LLMs
+> in building a production-grade security system. All architectural decisions were
+> made by the author — LLMs served as an implementation tool, not a decision maker.
+
 **Truthsayer** is an enterprise-grade SSH bastion host written in Go. It sits transparently between engineers and infrastructure, recording every session, analyzing command intent with a local LLM, and providing deep visibility through eBPF kernel hooks — all without sending a single byte of session data to an external service.
 
 ```
@@ -45,7 +49,7 @@ Traditional SSH jump servers are blind. They forward traffic but have no awarene
 | VTE terminal decoder (anti-obfuscation) | ✅ Done |
 | Command filter engine (Aho-Corasick) | ✅ Done |
 | PTY-aware shell session filtering | ✅ Done |
-| Session recording — asciinema v2 `.cast` format | ✅ Done |
+| Session recording — asciinema v2 `.cast` format | 🔧 In progress |
 | Live session streaming over WebSocket | 📅 Planned |
 | Local LLM intent analysis (Ollama + Mistral 7B) | 📅 Planned |
 | JIT SSH certificates via HashiCorp Vault | 📅 Planned |
@@ -229,7 +233,7 @@ TBAS-203 ✅ E2E filter tests with execution counter
 TBAS-801 ✅ PTY-aware command filtering for interactive shell sessions  
 
 ### Phase 4 — Audit & Session Recording 🔧 In progress
-TBAS-003 ✅ Recorder in bridge (asciinema v2)
+TBAS-003 — Recorder in bridge (asciinema v2)  
 TBAS-301 — Session ID generation  
 TBAS-302 — Live session streaming over WebSocket  
 TBAS-303 — Session metadata in PostgreSQL  
