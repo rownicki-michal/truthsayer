@@ -258,6 +258,27 @@ Acceptance criteria:
 Files: internal/store/db.go
 Dependency: TBAS-301
 
+TBAS-304 | WebSocket HTTP endpoint for live session streaming
+Type: Task | Priority: Medium | Component: audit, api
+─────────────────────────────────────────────────────────────────────────────
+Streamer (TBAS-302) implements the fan-out backend but has no HTTP layer.
+Expose a WebSocket endpoint so browser-based admin panels can observe live
+sessions in read-only mode without requiring SSH access.
+
+Acceptance criteria:
+  - HTTP server listens on configurable port (default 8080)
+  - GET /sessions — returns list of active session IDs and metadata
+  - GET /sessions/{id}/stream — upgrades to WebSocket, streams terminal output
+  - New observer receives last 4KB replay buffer on connect (via Streamer)
+  - Observer disconnect does not affect the proxied session
+  - Max 10 observers per session enforced (Streamer limit)
+  - Authentication: Bearer token or basic auth (configurable)
+  - go test ./internal/api/... passes with mock Streamer
+
+Files: internal/api/server.go, internal/api/handler.go,
+       internal/api/server_test.go
+Dependency: TBAS-302
+
 
 ================================================================================
   EPIC: TBAS-400 — Identity & Zero Trust
