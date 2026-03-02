@@ -2,6 +2,7 @@ package heart
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 
@@ -120,8 +121,11 @@ func (b *Bridge) Run() {
 	})
 
 	if err := eg.Wait(); err != nil {
-		log.Printf("[BRIDGE] session error: %v", err)
-
+		if errors.Is(err, io.EOF) {
+			log.Println("[BRIDGE] session done")
+		} else {
+			log.Printf("[BRIDGE] session error: %v", err)
+		}
 	}
 }
 
