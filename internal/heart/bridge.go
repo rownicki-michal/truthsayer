@@ -2,7 +2,6 @@ package heart
 
 import (
 	"context"
-	"errors"
 	"io"
 	"log"
 
@@ -117,7 +116,7 @@ func (b *Bridge) Run() {
 	})
 	eg.Go(func() error {
 		<-ctx.Done()
-		return errors.Join(b.targetStdin.Close())
+		return b.targetStdin.Close()
 	})
 
 	if err := eg.Wait(); err != nil {
