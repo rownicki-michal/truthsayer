@@ -1,10 +1,13 @@
 package heart
 
 import (
+	"context"
+	"errors"
 	"io"
-	"sync"
+	"log"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sync/errgroup"
 )
 
 // Bridge manages bidirectional data flow between an SSH client
@@ -82,67 +85,48 @@ func (b *Bridge) WithStreamer(s io.Writer) {
 // when both output streams finish — this prevents deadlocks during
 // exec commands where the client never closes its stdin explicitly.
 func (b *Bridge) Run() {
-	var wg sync.WaitGroup
-	wg.Add(3)
-
-	// outputDone is closed when both stdout and stderr are exhausted.
-	outputDone := make(chan struct{})
-	var outputWg sync.WaitGroup
-	outputWg.Add(2)
-
-	// Target stdout → client (tee'd to recorder and streamer if set).
-	go func() {
-		defer wg.Done()
-		defer outputWg.Done()
-		io.Copy(b.outputDst(b.client), b.targetStdout)
-	}()
-
-	// Target stderr → client.Stderr() if ssh.Channel, otherwise client.
-	// Also tee'd to recorder and streamer if set.
-	go func() {
-		defer wg.Done()
-		defer outputWg.Done()
-
+	eg, ctx := errgroup.WithContext(context.Background())
+	eg.Go(func() error {
+		_, err := io.Copy(b.outputDst(b.client), b.targetStdout)
+		if err == nil {
+			return io.EOF
+		}
+		return err
+	})
+	eg.Go(func() error {
 		var clientDst io.Writer
 		if ch, ok := b.client.(ssh.Channel); ok {
 			clientDst = ch.Stderr()
 		} else {
 			clientDst = b.client
 		}
-		io.Copy(b.outputDst(clientDst), b.targetStderr)
-	}()
-
-	// Signal outputDone when both output streams finish.
-	go func() {
-		outputWg.Wait()
-		close(outputDone)
-	}()
-
-	// Client stdin → filter (if set) or targetStdin directly.
-	go func() {
-		defer wg.Done()
-
-		dst := b.stdinDst()
-
-		copyDone := make(chan struct{})
-		go func() {
-			defer close(copyDone)
-			io.Copy(dst, b.client)
-		}()
-
-		select {
-		case <-copyDone:
-			// Client closed its end — normal shell exit.
-		case <-outputDone:
-			// Remote process exited — stop reading client stdin.
+		_, err := io.Copy(b.outputDst(clientDst), b.targetStderr)
+		if err == nil {
+			return io.EOF
 		}
-		b.targetStdin.Close()
+		return err
+	})
+	eg.Go(func() error {
+		dst := b.stdinDst()
+		_, err := io.Copy(dst, b.client)
+		if err == nil {
+			return io.EOF
+		}
+		return err
 
-		// Wait for the copy goroutine to drain.
-		<-copyDone
-	}()
+	})
+	eg.Go(func() error {
+		<-ctx.Done()
+		return b.targetStdin.Close()
+	})
 
-	wg.Wait()
+	if err := eg.Wait(); err != nil {
+		if errors.Is(err, io.EOF) {
+			log.Println("[BRIDGE] session done")
+		} else {
+			log.Printf("[BRIDGE] session error: %v", err)
+		}
+	}
 }
 
 // outputDst builds the destination writer for an output stream (stdout/stderr).

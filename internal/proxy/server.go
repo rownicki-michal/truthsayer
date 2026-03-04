@@ -275,14 +275,6 @@ func (s *SSHServer) handleConnection(nConn net.Conn) {
 	}
 }
 
-func (s *SSHServer) newPTYFilterWriter(targetStdin io.WriteCloser, clientChan ssh.Channel, term string) *filter.FilterWriter {
-	if term == "" {
-		term = "xterm"
-	}
-	decoder := emulation.NewDecoderFactory().FromTerm(term)
-	return filter.NewPTYFilterWriter(targetStdin, clientChan, decoder, s.filterEngine, s.blockAction)
-}
-
 // newRecorder creates a Recorder for the given session. On failure it logs the
 // error and returns a NopRecorder so the session continues without recording.
 func (s *SSHServer) newRecorder(sessionID string, width, height int) audit.RecorderIface {
@@ -378,7 +370,12 @@ func (s *SSHServer) handleSession(
 			defer recorder.Close()
 
 			bridge := heart.NewBridge(clientChan, targetStdin, targetStdout, targetStderr)
-			bridge.WithFilter(s.newPTYFilterWriter(targetStdin, clientChan, ptyReq.Term))
+			decoder := emulation.NewDecoderFactory().FromTerm(ptyReq.Term)
+			// TODO filter needs only decoder, s.filterEngine, s.blockAction
+			// all network connections are set in bridge
+			// filterEnding and blockAction have to be separated from server layer
+			filter := filter.NewPTYFilterWriter(targetStdin, clientChan, decoder, s.filterEngine, s.blockAction)
+			bridge.WithFilter(filter)
 			bridge.WithRecorder(recorder)
 			bridge.Run()
 
